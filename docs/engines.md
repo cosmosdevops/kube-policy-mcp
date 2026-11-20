@@ -17,29 +17,36 @@ and their offline limitations. It needs no config file.
 
 | Command | Engines | Binary size |
 | --- | --- | --- |
-| `make build` | OPA and Kyverno | about 129 MB |
-| `make build-opa` | OPA only | about 36 MB |
-| `make build-kyverno` | Kyverno only | about 108 MB |
+| `make build` | OPA, ValidatingAdmissionPolicy and Gatekeeper | about 99 MB |
+| `make build-opa` | OPA only | about 34 MB |
+| `make build-vap` | ValidatingAdmissionPolicy only | about 73 MB |
+| `make build-gatekeeper` | Gatekeeper only | about 93 MB |
 
 The size difference is real: an engine that is left out is not linked, and
-neither are its dependencies. The OPA-only build contains no Kyverno or
-Kubernetes API server code.
+neither are its dependencies. The OPA-only build contains no Kubernetes API
+server or Gatekeeper code. The ValidatingAdmissionPolicy-only build contains
+no OPA code.
 
-The plain `go build` equivalents use build tags:
+Gatekeeper is the exception. It is built on OPA and on the Kubernetes API
+server libraries, so a Gatekeeper-only build still links both. It just does
+not offer the `opa` and `vap` engines.
+
+The plain `go build` equivalents use build tags. There is one tag per
+engine: `no_opa`, `no_vap` and `no_gatekeeper`.
 
 ```bash
-go build -tags no_kyverno -o bin/kube-policy-mcp-opa ./cmd/kube-policy-mcp
+go build -tags "no_vap no_gatekeeper" -o bin/kube-policy-mcp-opa ./cmd/kube-policy-mcp
 ```
 
 ```bash
-go build -tags no_opa -o bin/kube-policy-mcp-kyverno ./cmd/kube-policy-mcp
+go build -tags no_gatekeeper -o bin/kube-policy-mcp ./cmd/kube-policy-mcp
 ```
 
 ## Turning an engine off at run time
 
 ```yaml
 engines:
-  kyverno:
+  gatekeeper:
     enabled: false
 ```
 
@@ -67,8 +74,10 @@ cmd/kube-policy-mcp/main.go
 
 internal/engines/builtin/opa.go      //go:build !no_opa
     imports  internal/engines/opa            (blank import)
-internal/engines/builtin/kyverno.go  //go:build !no_kyverno
-    imports  internal/engines/kyverno        (blank import)
+internal/engines/builtin/vap.go      //go:build !no_vap
+    imports  internal/engines/vap            (blank import)
+internal/engines/builtin/gatekeeper.go  //go:build !no_gatekeeper
+    imports  internal/engines/gatekeeper     (blank import)
 
 internal/engines/<name>/register.go
     func init() { engines.Register(engines.Registration{...}) }
@@ -104,16 +113,16 @@ the registrations.
 2. Register it in `internal/engines/<name>/register.go`:
 
    ```go
-   const EngineName = "gatekeeper"
+   const EngineName = "myengine"
 
    func init() {
        engines.Register(engines.Registration{
            Name:         EngineName,
-           Title:        "Gatekeeper",
+           Title:        "My Engine",
            Description:  "One sentence on what the adapter evaluates.",
            SourceFormat: "What a policy source path must contain.",
            Limitations:  []string{"What it cannot do offline."},
-           Module:       "github.com/open-policy-agent/gatekeeper/v3",
+           Module:       "example.com/upstream/myengine",
            New:          func() policy.Engine { return New() },
        })
    }
@@ -122,11 +131,11 @@ the registrations.
 3. Add `internal/engines/builtin/<name>.go`:
 
    ```go
-   //go:build !no_gatekeeper
+   //go:build !no_myengine
 
    package builtin
 
-   import _ "github.com/cosmosdevops/kube-policy-mcp/internal/engines/gatekeeper"
+   import _ "github.com/cosmosdevops/kube-policy-mcp/internal/engines/myengine"
    ```
 
 4. Add a contract test in the adapter package:
@@ -139,7 +148,12 @@ the registrations.
 
 That is all. Pack resolution, timeouts, exemptions, required-context checks,
 remediation, redaction, the six MCP tools and the CLI work for the new engine
-without changes. Use it in the config with `engine: gatekeeper`.
+without changes. Use it in the config with `engine: myengine`.
+
+The three built-in adapters are the reference: `opa` is the smallest,
+`vap` shows policies that need a second object (the binding) to take
+effect, and `gatekeeper` shows one policy per constraint with a shared
+template.
 
 ## The adapter contract
 
@@ -180,11 +194,11 @@ What an adapter does **not** need to do, because the core does it:
 ## Limits of the modularity
 
 - **One Go module.** All adapters share one `go.mod`, so dependency versions
-  must be compatible across engines even in a single-engine build. This is
-  why OPA is pinned to v1.20.2: newer OPA releases and Kyverno 1.20 need
-  incompatible versions of `gobwas/glob`. An OPA-only binary does not link
-  Kyverno, but it is still built against that pinned OPA.
+  must be compatible across engines even in a single-engine build. Today
+  that means the Kubernetes libraries stay at the version Gatekeeper builds
+  against (v0.36.x), also for the ValidatingAdmissionPolicy adapter.
 - **Compile-time plug-ins only.** Adapters are Go packages linked into the
   binary. There is no loading of engines from separate files at run time.
-- **The example library and the default tests use both engines.** The example
-  packs mix OPA and Kyverno sources, so they only work in the full build.
+- **The example library uses all three engines.** The example packs mix
+  OPA, ValidatingAdmissionPolicy and Gatekeeper sources, so they only work in
+  the full build.

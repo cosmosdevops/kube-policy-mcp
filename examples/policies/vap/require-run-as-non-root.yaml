@@ -1,0 +1,58 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    kubepolicy.dev/title: Non-root container execution
+    kubepolicy.dev/category: Pod Security
+    kubepolicy.dev/severity: high
+    kubepolicy.dev/description: >-
+      Containers must run as a non-root user. runAsNonRoot must be true at the pod level or on every container.
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Set securityContext.runAsNonRoot to true in the pod spec, or set securityContext.runAsNonRoot to true on every container.
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs", "cronjobs"]
+  variables:
+    # A ValidatingAdmissionPolicy has no autogen. To cover pod controllers the
+    # policy matches them itself and finds the pod spec inside each kind.
+    - name: podSpec
+      expression: >-
+        object.kind == 'Pod' ? object.spec
+        : object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec
+        : object.spec.template.spec
+    - name: allContainers
+      expression: >-
+        variables.podSpec.containers
+        + variables.podSpec.?initContainers.orValue([])
+        + variables.podSpec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        variables.podSpec.?securityContext.?runAsNonRoot.orValue(false)
+        ? variables.allContainers.all(c, c.?securityContext.?runAsNonRoot.orValue(true))
+        : variables.allContainers.all(c, c.?securityContext.?runAsNonRoot.orValue(false))
+      message: Containers must run as non-root. Set runAsNonRoot to true in the pod securityContext or on every container.
+---
+# A policy does nothing until a binding puts it into effect. The binding also
+# decides the action: Deny, Warn or Audit.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: require-run-as-non-root
+spec:
+  policyName: require-run-as-non-root
+  validationActions: [Deny]

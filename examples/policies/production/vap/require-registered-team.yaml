@@ -1,0 +1,47 @@
+# This policy takes a parameter: a ConfigMap that lives in the cluster. The
+# binding names it with paramRef. Offline, the ConfigMap must be supplied in
+# context.resources; otherwise the result is "unknown", never "pass".
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: require-registered-team
+  annotations:
+    kubepolicy.dev/title: Team must be registered
+    kubepolicy.dev/category: Ownership
+    kubepolicy.dev/severity: medium
+    kubepolicy.dev/description: >-
+      The team label of a production workload must be a key of the ConfigMap
+      registered-teams in the platform-system namespace.
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Set metadata.labels.team to a team listed in the registered-teams ConfigMap, or ask the platform team to register your team.
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+  validations:
+    - expression: >-
+        object.metadata.?labels.?team.orValue('') in params.data
+      message: The team label is not a registered team.
+  auditAnnotations:
+    - key: field
+      valueExpression: "'metadata.labels.team'"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: require-registered-team
+spec:
+  policyName: require-registered-team
+  validationActions: [Deny]
+  paramRef:
+    name: registered-teams
+    namespace: platform-system
+    parameterNotFoundAction: Deny

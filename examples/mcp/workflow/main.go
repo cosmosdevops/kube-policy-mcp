@@ -72,7 +72,7 @@ func main() {
 	list := call("list_policies", map[string]any{"kind": "Deployment"})
 	for _, p := range list["policies"].([]any) {
 		pol := p.(map[string]any)
-		fmt.Printf("- %-42s %-7s %s\n", pol["id"], pol["severity"], pol["title"])
+		fmt.Printf("- %-58s %-7s %s\n", pol["id"], pol["severity"], pol["title"])
 	}
 
 	step(4, "evaluate the proposed Deployment (evaluate_manifests)")

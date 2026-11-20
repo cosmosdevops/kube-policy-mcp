@@ -1,0 +1,88 @@
+# This template finds the pod spec inside each workload kind itself, instead
+# of relying on an ExpansionTemplate. Both styles work.
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowedtags
+  annotations:
+    metadata.gatekeeper.sh/title: Disallowed image tags
+    description: >-
+      Container images must use an explicit tag that is not on the disallowed list.
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowedTags
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            tags:
+              description: Image tags that must not be used, for example latest.
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowedtags
+
+        violation[{"msg": msg, "details": {"container": container.name, "image": container.image}}] {
+          container := pod_spec.containers[_]
+          tag := input.parameters.tags[_]
+          endswith(container.image, concat(":", ["", tag]))
+          msg := sprintf("container %q uses image %q with the disallowed tag %q", [container.name, container.image, tag])
+        }
+
+        violation[{"msg": msg, "details": {"container": container.name, "image": container.image}}] {
+          container := pod_spec.containers[_]
+          not contains(container.image, ":")
+          msg := sprintf("container %q uses image %q without a tag", [container.name, container.image])
+        }
+
+        pod_spec = spec {
+          input.review.object.kind == "Pod"
+          spec := input.review.object.spec
+        }
+
+        pod_spec = spec {
+          input.review.object.kind == "CronJob"
+          spec := input.review.object.spec.jobTemplate.spec.template.spec
+        }
+
+        pod_spec = spec {
+          not input.review.object.kind == "Pod"
+          not input.review.object.kind == "CronJob"
+          spec := input.review.object.spec.template.spec
+        }
+---
+# This constraint only applies in namespaces labelled environment=production.
+# The namespace labels are context: without them the result is "unknown".
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowedTags
+metadata:
+  name: disallow-latest-tag-in-production
+  annotations:
+    kubepolicy.dev/title: No mutable image tags in production
+    kubepolicy.dev/description: >-
+      In production namespaces, container images must use an explicit tag other than latest.
+    kubepolicy.dev/category: Supply Chain
+    kubepolicy.dev/severity: medium
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Pin every container image to an explicit version tag or digest.
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+      - apiGroups: ["batch"]
+        kinds: ["Job", "CronJob"]
+    namespaceSelector:
+      matchLabels:
+        environment: production
+  parameters:
+    tags: ["latest"]

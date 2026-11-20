@@ -130,6 +130,8 @@ func (c *Context) AllNamespaces() []Namespace {
 //	kubernetesVersion    the target version
 //	variables.<name>     a named variable
 //	data.<name>          a named policy data entry
+//	resources            at least one object in context.resources, stating
+//	                     what else exists in the cluster
 //
 // Unrecognised keys are reported as missing so they are never ignored.
 func (c *Context) Missing(required []string, resourceNamespace string) []string {
@@ -153,6 +155,8 @@ func (c *Context) Missing(required []string, resourceNamespace string) []string 
 			_, ok = c.Variables[strings.TrimPrefix(key, "variables.")]
 		case strings.HasPrefix(key, "data."):
 			_, ok = c.Data[strings.TrimPrefix(key, "data.")]
+		case key == "resources":
+			ok = len(c.Resources) > 0
 		}
 		if !ok {
 			missing = append(missing, key)

@@ -1,0 +1,43 @@
+# The ConstraintTemplate holds the logic. It enforces nothing by itself.
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowhostpath
+  annotations:
+    metadata.gatekeeper.sh/title: Restrictions on hostPath volumes
+    description: >-
+      Pods must not mount directories from the node file system through hostPath volumes.
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowHostPath
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowhostpath
+
+        violation[{"msg": msg, "details": {"volume": volume.name}}] {
+          volume := input.review.object.spec.volumes[_]
+          volume.hostPath
+          msg := sprintf("hostPath volume %q is not allowed. Use a PersistentVolumeClaim, ConfigMap, Secret or emptyDir instead.", [volume.name])
+        }
+---
+# The constraint puts the template into effect: where it applies and with
+# which enforcement action. Each constraint is one policy.
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowHostPath
+metadata:
+  name: restrict-hostpath-volumes
+  annotations:
+    kubepolicy.dev/category: Pod Security
+    kubepolicy.dev/severity: high
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Replace hostPath volumes with a PersistentVolumeClaim, a ConfigMap, a Secret or an emptyDir volume.
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]

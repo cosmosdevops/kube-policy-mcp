@@ -16,11 +16,21 @@ policyPacks:
     sources:
       - engine: opa
         path: ./policies/rego
-      - engine: kyverno
-        path: ./policies/kyverno
+      - engine: vap
+        path: ./policies/vap
+      - engine: gatekeeper
+        path: ./policies/gatekeeper
     # Pack-level exemptions work for every engine. They are the exception
-    # mechanism for Rego, which has no native one.
+    # mechanism for engines that have no native one.
     exemptions:
+      - name: node-exporter-host-access
+        policies:
+          - vap/disallow-host-namespaces
+        resources:
+          kinds: [DaemonSet]
+          namespaces: [monitoring]
+          names: [node-exporter]
+        reason: node-exporter needs the host network and host PID namespace to read node metrics (PLAT-1201).
       - name: node-exporter-upstream-image
         policies:
           - opa/kubernetes.approved_registries
@@ -37,5 +47,7 @@ policyPacks:
     sources:
       - engine: opa
         path: ./policies/production/rego
-      - engine: kyverno
-        path: ./policies/production/kyverno
+      - engine: vap
+        path: ./policies/production/vap
+      - engine: gatekeeper
+        path: ./policies/production/gatekeeper

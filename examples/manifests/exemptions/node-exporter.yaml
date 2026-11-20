@@ -1,6 +1,6 @@
-# node-exporter needs host access and uses an upstream image. Two exemptions
-# cover it: a Kyverno PolicyException (host namespaces) and a pack-level
-# exemption (approved registries).
+# node-exporter needs host access and uses an upstream image. Two pack-level
+# exemptions in kube-policy-mcp.yaml cover it: one for host namespaces and one
+# for approved registries.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

@@ -1,4 +1,4 @@
-package kyverno
+package vap
 
 import (
 	"os"
@@ -21,7 +21,7 @@ func TestEngineContract(t *testing.T) {
 		}
 		manifests = append(manifests, append([]byte("\n---\n"), data...)...)
 	}
-	for _, source := range []string{"policies/kyverno", "policies/production/kyverno"} {
+	for _, source := range []string{"policies/vap", "policies/production/vap"} {
 		t.Run(source, func(t *testing.T) {
 			enginetest.Run(t, New(), filepath.Join(examples, source), string(manifests))
 		})

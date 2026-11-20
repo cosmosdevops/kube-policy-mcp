@@ -181,7 +181,7 @@ func TestAgentWorkflow(t *testing.T) {
 		Engines []string `json:"engines"`
 	}
 	call(t, s, "list_policy_packs", nil, &packs)
-	if packs.DefaultPolicyPack != "platform-baseline" || len(packs.PolicyPacks) != 2 || strings.Join(packs.Engines, ",") != "kyverno,opa" {
+	if packs.DefaultPolicyPack != "platform-baseline" || len(packs.PolicyPacks) != 2 || strings.Join(packs.Engines, ",") != "gatekeeper,opa,vap" {
 		t.Fatalf("packs = %+v", packs)
 	}
 
@@ -202,16 +202,20 @@ func TestAgentWorkflow(t *testing.T) {
 			t.Errorf("policy %s: description or support missing", p.ID)
 		}
 	}
-	if list.Count != 11 || engines["opa"] != 6 || engines["kyverno"] != 5 {
+	if list.Count != 11 || engines["opa"] != 6 || engines["vap"] != 3 || engines["gatekeeper"] != 2 {
 		t.Fatalf("Deployment policies: count=%d engines=%v", list.Count, engines)
 	}
 	call(t, s, "list_policies", map[string]any{"kind": "ConfigMap"}, &list)
 	if list.Count != 1 || list.Policies[0].ID != "opa/kubernetes.restricted_namespaces" {
 		t.Errorf("ConfigMap policies = %+v", list.Policies)
 	}
-	call(t, s, "list_policies", map[string]any{"engine": "kyverno", "policyPack": "production"}, &list)
-	if list.Count != 7 {
-		t.Errorf("production kyverno policies = %d", list.Count)
+	call(t, s, "list_policies", map[string]any{"engine": "vap", "policyPack": "production"}, &list)
+	if list.Count != 4 {
+		t.Errorf("production vap policies = %d", list.Count)
+	}
+	call(t, s, "list_policies", map[string]any{"engine": "gatekeeper", "policyPack": "production"}, &list)
+	if list.Count != 3 {
+		t.Errorf("production gatekeeper policies = %d", list.Count)
 	}
 
 	var pol struct {
@@ -222,16 +226,23 @@ func TestAgentWorkflow(t *testing.T) {
 		} `json:"policy"`
 		Definition string `json:"definition"`
 	}
-	call(t, s, "get_policy", map[string]any{"policy": "kyverno/disallow-host-namespaces", "includeDefinition": true}, &pol)
-	if len(pol.Policy.Rules) != 3 || pol.Policy.Rules[0].Expression == "" || len(pol.Policy.Exceptions) != 1 ||
-		!strings.Contains(pol.Definition, "kind: ValidatingPolicy") || pol.Policy.Remediation == "" {
+	call(t, s, "get_policy", map[string]any{"policy": "vap/disallow-host-namespaces", "includeDefinition": true}, &pol)
+	// The definition of an admission policy includes the binding that enforces it.
+	if len(pol.Policy.Rules) != 3 || pol.Policy.Rules[0].Expression == "" || pol.Policy.Enforcement != "deny" ||
+		!strings.Contains(pol.Definition, "kind: ValidatingAdmissionPolicy\n") || !strings.Contains(pol.Definition, "kind: ValidatingAdmissionPolicyBinding") || pol.Policy.Remediation == "" {
 		t.Errorf("get_policy = %+v", pol)
 	}
-	if isErr, _ := call(t, s, "get_policy", map[string]any{"policy": "kyverno/nope"}, nil); !isErr {
+	// A Gatekeeper policy is a constraint; its definition includes the template.
+	call(t, s, "get_policy", map[string]any{"policy": "gatekeeper/K8sRequiredLimits/require-memory-limits", "includeDefinition": true}, &pol)
+	if pol.Policy.Title != "Required memory limits" || pol.Policy.Enforcement != "deny" || pol.Policy.Remediation == "" ||
+		!strings.Contains(pol.Definition, "kind: K8sRequiredLimits") || !strings.Contains(pol.Definition, "kind: ConstraintTemplate") {
+		t.Errorf("get_policy = %+v", pol)
+	}
+	if isErr, _ := call(t, s, "get_policy", map[string]any{"policy": "vap/nope"}, nil); !isErr {
 		t.Error("unknown policy must be a tool error")
 	}
 
-	// 4-6. Submit a non-compliant Deployment; both engines report violations.
+	// 4-6. Submit a non-compliant Deployment; every engine reports violations.
 	var bad report
 	call(t, s, "evaluate_manifests", map[string]any{"manifests": read(t, example("manifests", "noncompliant", "web.yaml"))}, &bad)
 	if bad.Status != "fail" || bad.Compliant || !bad.Complete || bad.Summary.Violations == 0 || bad.Summary.PoliciesEvaluated != 11 {
@@ -249,14 +260,14 @@ func TestAgentWorkflow(t *testing.T) {
 			t.Errorf("finding lacks detail: %+v", f)
 		}
 	}
-	if byEngine["opa"] == 0 || byEngine["kyverno"] == 0 {
-		t.Fatalf("want violations from both engines, got %v", byEngine)
+	if byEngine["opa"] == 0 || byEngine["vap"] == 0 || byEngine["gatekeeper"] == 0 {
+		t.Fatalf("want violations from every engine, got %v", byEngine)
 	}
 	for _, id := range []string{
 		"opa/kubernetes.required_owner_labels", "opa/kubernetes.resource_limits", "opa/kubernetes.approved_registries",
 		"opa/kubernetes.health_probes", "opa/kubernetes.restricted_namespaces",
-		"kyverno/disallow-privileged-containers", "kyverno/disallow-host-namespaces", "kyverno/require-run-as-non-root",
-		"kyverno/restrict-hostpath-volumes", "kyverno/require-memory-limits",
+		"vap/disallow-privileged-containers", "vap/disallow-host-namespaces", "vap/require-run-as-non-root",
+		"gatekeeper/K8sDisallowHostPath/restrict-hostpath-volumes", "gatekeeper/K8sRequiredLimits/require-memory-limits",
 	} {
 		if _, ok := byPolicy[id]; !ok {
 			t.Errorf("expected a violation of %s", id)
@@ -280,9 +291,25 @@ func TestAgentWorkflow(t *testing.T) {
 		t.Errorf("rego explanation = %+v", ex)
 	}
 	ex.Actual, ex.Rule = nil, nil
-	call(t, s, "explain_violation", map[string]any{"findingId": byPolicy["kyverno/disallow-host-namespaces"].ID}, &ex)
-	if ex.Rule == nil || !strings.Contains(ex.Expected, "hostNetwork") || !strings.Contains(ex.Summary, "Deployment/default/web") {
-		t.Errorf("kyverno explanation = %+v", ex)
+	call(t, s, "explain_violation", map[string]any{"findingId": byPolicy["vap/disallow-host-namespaces"].ID}, &ex)
+	if ex.Rule == nil || !strings.Contains(ex.Expected, "hostNetwork") || !strings.Contains(ex.Summary, "Deployment/default/web") ||
+		ex.Actual == nil || !ex.Actual.Found || ex.Actual.Field != "spec.template.spec.hostNetwork" || ex.Actual.Value != "true" {
+		t.Errorf("vap explanation = %+v actual = %+v", ex, ex.Actual)
+	}
+	ex.Actual, ex.Rule = nil, nil
+	call(t, s, "explain_violation", map[string]any{"findingId": byPolicy["gatekeeper/K8sRequiredLimits/require-memory-limits"].ID}, &ex)
+	if ex.Rule == nil || ex.Policy.Description == "" || !strings.Contains(ex.Summary, "resources.limits.memory") {
+		t.Errorf("gatekeeper explanation = %+v", ex)
+	}
+	// A policy with several failing checks reports each of them.
+	privileged := 0
+	for _, f := range bad.Findings {
+		if f.Policy == "vap/disallow-privileged-containers" && f.Status == "fail" {
+			privileged++
+		}
+	}
+	if privileged != 2 {
+		t.Errorf("want both failing validations of vap/disallow-privileged-containers, got %d", privileged)
 	}
 	if isErr, _ := call(t, s, "explain_violation", map[string]any{"findingId": "f-00000000-001"}, nil); !isErr {
 		t.Error("explaining an unknown finding must be a tool error")
@@ -299,7 +326,7 @@ func TestAgentWorkflow(t *testing.T) {
 		t.Errorf("summary = %+v", good.Summary)
 	}
 	for _, pr := range good.PolicyResults {
-		if pr.Policy == "kyverno/disallow-host-namespaces" && (pr.Results["pass"] != 1 || pr.Results["not_applicable"] != 1) {
+		if pr.Policy == "vap/disallow-host-namespaces" && (pr.Results["pass"] != 1 || pr.Results["not_applicable"] != 1) {
 			t.Errorf("Service must be not_applicable for a pod policy: %v", pr.Results)
 		}
 	}
@@ -367,7 +394,7 @@ func TestExemptionsAreHonoured(t *testing.T) {
 	s := connect(t)
 	var r report
 	call(t, s, "evaluate_manifests", map[string]any{"files": []string{"exemptions/node-exporter.yaml"}}, &r)
-	if !r.Compliant || r.Summary.Exempted != 2 || r.Summary.Violations != 0 {
+	if !r.Compliant || r.Summary.Exempted != 3 || r.Summary.Violations != 0 {
 		t.Fatalf("report = %+v", r.Summary)
 	}
 	sources := map[string]string{}
@@ -378,7 +405,7 @@ func TestExemptionsAreHonoured(t *testing.T) {
 		}
 		sources[f.Policy] = f.Exemption.Source
 	}
-	if sources["kyverno/disallow-host-namespaces"] != "kyverno-policy-exception" || sources["opa/kubernetes.approved_registries"] != "pack-exemption" {
+	if sources["vap/disallow-host-namespaces"] != "pack-exemption" || sources["opa/kubernetes.approved_registries"] != "pack-exemption" {
 		t.Errorf("exemption sources = %v", sources)
 	}
 	// The same DaemonSet under another name is not covered.
@@ -429,13 +456,13 @@ func TestMissingContextIsSurfaced(t *testing.T) {
 			failed[f.Policy] = true
 		}
 	}
-	if !failed["opa/production.min_replicas"] || !failed["kyverno/require-registered-team"] || len(failed) != 2 {
+	if !failed["opa/production.min_replicas"] || !failed["vap/require-registered-team"] || len(failed) != 2 {
 		t.Errorf("context-dependent violations = %v", failed)
 	}
 
 	// A non-production namespace: the production-only policies do not apply.
 	ctx["namespace"] = map[string]any{"name": "checkout", "labels": map[string]any{"environment": "dev"}}
-	call(t, s, "evaluate_manifests", map[string]any{"manifests": broken, "policyPack": "production", "context": ctx, "policies": []string{"opa/production.min_replicas", "kyverno/disallow-latest-tag-in-production"}}, &r)
+	call(t, s, "evaluate_manifests", map[string]any{"manifests": broken, "policyPack": "production", "context": ctx, "policies": []string{"opa/production.min_replicas", "gatekeeper/K8sDisallowedTags/disallow-latest-tag-in-production"}}, &r)
 	if r.Summary.NotApplicable != 2 || r.Summary.Passed != 0 || r.Summary.PoliciesEvaluated != 2 {
 		t.Errorf("dev namespace: %+v", r.Summary)
 	}
@@ -546,57 +573,79 @@ func run(t *testing.T, bin, config string, args ...string) (int, string) {
 	return 0, string(out)
 }
 
-// TestSingleEngineBuilds checks that each engine can be left out at build
-// time, that the remaining engine still works on its own, and that a pack
-// needing the missing engine is refused rather than partly evaluated.
+// TestSingleEngineBuilds checks that engines can be left out at build time,
+// that the remaining engine still works on its own, and that a pack needing a
+// missing engine is refused rather than partly evaluated.
 func TestSingleEngineBuilds(t *testing.T) {
 	bad := example("manifests", "noncompliant", "web.yaml")
 	good := example("manifests", "compliant", "web.yaml")
+	const (
+		modOPA        = "github.com/open-policy-agent/opa"
+		modGatekeeper = "github.com/open-policy-agent/gatekeeper/v3"
+		modAPIServer  = "k8s.io/apiserver"
+	)
 	variants := []struct {
-		engine, other, tags, source, otherSource, upstream string
-		violations                                         string
+		// engine is the one engine in the build; source is its example
+		// policy directory and violation a policy the bad manifest breaks.
+		engine, source, tags, upstream, violation string
+		// absent lists upstream modules that must not be linked in.
+		// Gatekeeper is built on OPA and the API server, so it needs both.
+		absent []string
 	}{
-		{"opa", "kyverno", "no_kyverno", "rego", "kyverno", "github.com/open-policy-agent/opa", "opa/kubernetes.resource_limits"},
-		{"kyverno", "opa", "no_opa", "kyverno", "rego", "github.com/kyverno/kyverno", "kyverno/disallow-host-namespaces"},
+		{"opa", "rego", "no_vap no_gatekeeper", modOPA, "opa/kubernetes.resource_limits", []string{modGatekeeper, modAPIServer}},
+		{"vap", "vap", "no_opa no_gatekeeper", modAPIServer, "vap/disallow-host-namespaces", []string{modGatekeeper, modOPA}},
+		{"gatekeeper", "gatekeeper", "no_opa no_vap", modGatekeeper, "gatekeeper/K8sRequiredLimits/require-memory-limits", nil},
 	}
-	for _, v := range variants {
+	for i, v := range variants {
+		// other is an engine that this build does not have.
+		other := variants[(i+1)%len(variants)]
 		t.Run(v.engine+" only", func(t *testing.T) {
 			bin := buildVariant(t, "kube-policy-mcp-"+v.engine, v.tags)
 
-			// The other engine's code is really gone from the binary.
+			// The other engines' code is really gone from the binary.
 			mods, err := exec.Command("go", "version", "-m", bin).CombinedOutput()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(mods), v.upstream) {
+			if !strings.Contains(string(mods), "\t"+v.upstream+"\t") {
 				t.Errorf("%s is missing from its own build", v.upstream)
 			}
-			for _, o := range variants {
-				if o.engine != v.engine && strings.Contains(string(mods), "\t"+o.upstream+"\t") {
-					t.Errorf("%s is still linked into the %s-only build", o.upstream, v.engine)
+			for _, mod := range v.absent {
+				if strings.Contains(string(mods), "\t"+mod+"\t") {
+					t.Errorf("%s is still linked into the %s-only build", mod, v.engine)
 				}
 			}
 
 			code, out := run(t, bin, "", "engines")
-			if code != 0 || !strings.HasPrefix(out, v.engine+":") || strings.Contains(out, "\n"+v.other+":") {
+			if code != 0 || !strings.HasPrefix(out, v.engine+":") {
 				t.Errorf("engines output:\n%s", out)
+			}
+			for _, o := range variants {
+				if o.engine != v.engine && strings.Contains(out, "\n"+o.engine+":") {
+					t.Errorf("engine %s is listed in the %s-only build:\n%s", o.engine, v.engine, out)
+				}
 			}
 
 			// A pack that only needs this engine works end to end.
 			own := writeConfig(t, "", [2]string{v.engine, v.source})
 			code, out = run(t, bin, own, "evaluate", "-f", bad)
-			if code != 1 || !strings.Contains(out, v.violations) || strings.Contains(out, v.other+"/") {
+			if code != 1 || !strings.Contains(out, v.violation) {
 				t.Errorf("own pack, bad manifest: exit %d\n%s", code, out)
+			}
+			for _, o := range variants {
+				if o.engine != v.engine && strings.Contains(out, " "+o.engine+"/") {
+					t.Errorf("findings from engine %s in the %s-only build:\n%s", o.engine, v.engine, out)
+				}
 			}
 			code, out = run(t, bin, own, "evaluate", "-f", good)
 			if code != 0 || !strings.Contains(out, "Verdict:     PASS") {
 				t.Errorf("own pack, good manifest: exit %d\n%s", code, out)
 			}
 
-			// A pack that needs the missing engine is refused as a whole.
-			both := writeConfig(t, "", [2]string{v.engine, v.source}, [2]string{v.other, v.otherSource})
+			// A pack that needs a missing engine is refused as a whole.
+			both := writeConfig(t, "", [2]string{v.engine, v.source}, [2]string{other.engine, other.source})
 			code, out = run(t, bin, both, "evaluate", "-f", good)
-			if code != 3 || !strings.Contains(out, `engine "`+v.other+`", which is not part of this build`) {
+			if code != 3 || !strings.Contains(out, `engine "`+other.engine+`", which is not part of this build`) {
 				t.Errorf("mixed pack must be refused: exit %d\n%s", code, out)
 			}
 			code, out = run(t, bin, both, "packs")
@@ -606,11 +655,11 @@ func TestSingleEngineBuilds(t *testing.T) {
 
 			// Asking for an absent engine in the config is an error;
 			// turning an absent engine off is harmless.
-			code, out = run(t, bin, writeConfig(t, "engines:\n  "+v.other+":\n    enabled: true\n", [2]string{v.engine, v.source}), "packs")
+			code, out = run(t, bin, writeConfig(t, "engines:\n  "+other.engine+":\n    enabled: true\n", [2]string{v.engine, v.source}), "packs")
 			if code != 3 || !strings.Contains(out, "not part of this build") {
 				t.Errorf("enabling an absent engine: exit %d\n%s", code, out)
 			}
-			code, out = run(t, bin, writeConfig(t, "engines:\n  "+v.other+":\n    enabled: false\n", [2]string{v.engine, v.source}), "evaluate", "-f", good)
+			code, out = run(t, bin, writeConfig(t, "engines:\n  "+other.engine+":\n    enabled: false\n", [2]string{v.engine, v.source}), "evaluate", "-f", good)
 			if code != 0 {
 				t.Errorf("disabling an absent engine: exit %d\n%s", code, out)
 			}
@@ -653,7 +702,7 @@ func TestSingleEngineBuilds(t *testing.T) {
 	}
 
 	t.Run("no engines", func(t *testing.T) {
-		bin := buildVariant(t, "kube-policy-mcp-none", "no_opa no_kyverno")
+		bin := buildVariant(t, "kube-policy-mcp-none", "no_opa no_vap no_gatekeeper")
 		code, out := run(t, bin, example("kube-policy-mcp.yaml"), "packs")
 		if code != 3 || !strings.Contains(out, "without any policy engine") {
 			t.Errorf("exit %d\n%s", code, out)
@@ -664,27 +713,27 @@ func TestSingleEngineBuilds(t *testing.T) {
 // TestEnginesCanBeTurnedOffInConfig covers the run-time switch on the full build.
 func TestEnginesCanBeTurnedOffInConfig(t *testing.T) {
 	good := example("manifests", "compliant", "web.yaml")
-	off := "engines:\n  kyverno:\n    enabled: false\n"
+	off := "engines:\n  vap:\n    enabled: false\n"
 
 	code, out := run(t, binary, writeConfig(t, off, [2]string{"opa", "rego"}), "evaluate", "-f", good)
 	if code != 0 || !strings.Contains(out, "against 6 policy(ies)") {
-		t.Errorf("opa pack with kyverno off: exit %d\n%s", code, out)
+		t.Errorf("opa pack with vap off: exit %d\n%s", code, out)
 	}
 	// A pack that needs the disabled engine is refused, with the reason.
-	code, out = run(t, binary, writeConfig(t, off, [2]string{"opa", "rego"}, [2]string{"kyverno", "kyverno"}), "evaluate", "-f", good)
+	code, out = run(t, binary, writeConfig(t, off, [2]string{"opa", "rego"}, [2]string{"vap", "vap"}), "evaluate", "-f", good)
 	if code != 3 || !strings.Contains(out, "turned off in the configuration") {
 		t.Errorf("pack needing a disabled engine: exit %d\n%s", code, out)
 	}
-	code, out = run(t, binary, writeConfig(t, "engines:\n  kyverno:\n    enabled: false\n  opa:\n    enabled: false\n", [2]string{"opa", "rego"}), "packs")
+	code, out = run(t, binary, writeConfig(t, "engines:\n  vap:\n    enabled: false\n  opa:\n    enabled: false\n  gatekeeper:\n    enabled: false\n", [2]string{"opa", "rego"}), "packs")
 	if code != 3 || !strings.Contains(out, "every policy engine is turned off") {
 		t.Errorf("all engines off: exit %d\n%s", code, out)
 	}
-	code, out = run(t, binary, writeConfig(t, "engines:\n  gatekeeper: {}\n", [2]string{"opa", "rego"}), "packs")
-	if code != 3 || !strings.Contains(out, `engine "gatekeeper", which is not part of this build`) && !strings.Contains(out, `mentions engine "gatekeeper"`) {
+	code, out = run(t, binary, writeConfig(t, "engines:\n  kyverno: {}\n", [2]string{"opa", "rego"}), "packs")
+	if code != 3 || !strings.Contains(out, `engine "kyverno", which is not part of this build`) && !strings.Contains(out, `mentions engine "kyverno"`) {
 		t.Errorf("unknown engine in config: exit %d\n%s", code, out)
 	}
 
-	// The full build reports both engines, with the disabled one marked.
+	// The full build reports every engine, with the disabled one marked.
 	cmd := exec.Command(binary, "serve", "--config", writeConfig(t, off, [2]string{"opa", "rego"}))
 	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-test", Version: "0"}, nil)
 	session, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
@@ -704,7 +753,7 @@ func TestEnginesCanBeTurnedOffInConfig(t *testing.T) {
 	for _, e := range packs.EngineDetails {
 		state[e.Name] = e.Enabled
 	}
-	if strings.Join(packs.Engines, ",") != "opa" || len(state) != 2 || state["kyverno"] || !state["opa"] {
+	if strings.Join(packs.Engines, ",") != "gatekeeper,opa" || len(state) != 3 || state["vap"] || !state["opa"] || !state["gatekeeper"] {
 		t.Errorf("engines = %v details = %v", packs.Engines, state)
 	}
 }

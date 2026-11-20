@@ -1,0 +1,37 @@
+# Constraints below match Pods. These ExpansionTemplates make Gatekeeper also
+# check the Pod that a workload would create, so a Deployment with a bad pod
+# template is rejected too. Violations found this way are prefixed with
+# "[Implied by <template name>]".
+apiVersion: expansion.gatekeeper.sh/v1beta1
+kind: ExpansionTemplate
+metadata:
+  name: expand-workloads
+spec:
+  applyTo:
+    - groups: ["apps"]
+      kinds: ["DaemonSet", "Deployment", "ReplicaSet", "StatefulSet"]
+      versions: ["v1"]
+    - groups: ["batch"]
+      kinds: ["Job"]
+      versions: ["v1"]
+  templateSource: "spec.template"
+  generatedGVK:
+    kind: "Pod"
+    group: ""
+    version: "v1"
+---
+# A CronJob expands to a Job, which the template above expands to a Pod.
+apiVersion: expansion.gatekeeper.sh/v1beta1
+kind: ExpansionTemplate
+metadata:
+  name: expand-cronjobs
+spec:
+  applyTo:
+    - groups: ["batch"]
+      kinds: ["CronJob"]
+      versions: ["v1"]
+  templateSource: "spec.jobTemplate"
+  generatedGVK:
+    kind: "Job"
+    group: "batch"
+    version: "v1"

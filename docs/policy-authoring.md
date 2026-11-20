@@ -121,70 +121,227 @@ deny contains "need at least 2 replicas" if object.get(input.spec, "replicas", 1
 using them does not compile and evaluates to `error`. Because a source is one
 compile unit, that also breaks the other policies in the same directory.
 
-## Kyverno
+## ValidatingAdmissionPolicy
 
-Supported: `ValidatingPolicy`, `NamespacedValidatingPolicy` and
-`PolicyException` in the `policies.kyverno.io` group.
+Supported: `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding`
+from `admissionregistration.k8s.io/v1`. Use `engine: vap` in the config.
+
+A policy does nothing until a binding puts it into effect, in a cluster and
+here. Keep each policy and its bindings in the same source directory.
 
 ```yaml
-apiVersion: policies.kyverno.io/v1
-kind: ValidatingPolicy
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
-    policies.kyverno.io/title: Prohibited host networking
-    policies.kyverno.io/category: Pod Security
-    policies.kyverno.io/severity: high
-    policies.kyverno.io/description: Pods must not share the host network, PID or IPC namespaces.
+    kubepolicy.dev/title: Prohibited host networking
+    kubepolicy.dev/category: Pod Security
+    kubepolicy.dev/severity: high
+    kubepolicy.dev/description: Pods must not share the host network, PID or IPC namespaces.
     kubepolicy.dev/remediation: Remove hostNetwork, hostPID and hostIPC from the pod spec.
 spec:
-  validationActions: [Deny]
+  failurePolicy: Fail
   matchConstraints:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["pods"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets", "daemonsets"]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : object.spec.template.spec"
   validations:
-    - expression: "!object.spec.?hostNetwork.orValue(false)"
+    - expression: "!variables.podSpec.?hostNetwork.orValue(false)"
       message: Host networking is not allowed.
+    - expression: "!variables.podSpec.?hostPID.orValue(false)"
+      message: Sharing the host PID namespace is not allowed.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: disallow-host-namespaces
+spec:
+  policyName: disallow-host-namespaces
+  validationActions: [Deny]
 ```
 
 ### Annotations
 
+Kubernetes defines no metadata annotations for admission policies, so these
+are this project's own. All are optional.
+
 | Annotation | Used for |
 | --- | --- |
-| `policies.kyverno.io/title`, `/description`, `/category`, `/severity` | Standard Kyverno metadata. |
+| `kubepolicy.dev/title`, `/description`, `/category`, `/severity` | Shown in listings and explanations. |
 | `kubepolicy.dev/remediation` | The fix shown with each violation. |
 | `kubepolicy.dev/docs` | Comma-separated documentation links. |
 | `kubepolicy.dev/version` | Policy version. |
 | `kubepolicy.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
 
-Some required context is detected for you: a `namespaceSelector` needs
-`namespace.labels`, `namespaceObject` needs `namespace`, and
+Some required context is detected for you: a `namespaceSelector` (on the
+policy or a binding) and `namespaceObject` need `namespace.labels`, and
 `request.userInfo` needs `user`.
 
 ### Things to know
 
-- **Enforcement.** `Deny` gives `fail`. `Warn` or `Audit` alone give `warning`.
-- **Autogen.** A policy that matches `pods` is also applied to Deployments,
-  StatefulSets, DaemonSets, Jobs, CronJobs and ReplicaSets, as in a cluster.
-- **One finding per policy.** Kyverno stops at the first failing validation.
-  Split unrelated checks into separate policies if you want them all listed.
-- **Field and per-result fix.** Add `auditAnnotations` with the keys `field`
-  or `remediation` and they are copied into the finding. Careful with
-  autogen: a literal such as `'spec.hostNetwork'` is not rewritten for a
-  Deployment, where the real path is `spec.template.spec.hostNetwork`.
-- **Lookups.** `resource.Get` and `resource.List` only see the submitted
-  manifests and `context.resources`. If the object is not there, the result
-  is `unknown`.
-- **Not run offline.** Policies using the `http` library, `image.GetMetadata`,
-  `resource.Post` or `resource.ToGVR` evaluate to `unknown`.
-- **Exceptions.** Put `PolicyException` files anywhere in a Kyverno source.
-  They apply to every policy in the resolved pack that they reference.
-- **Legacy policies.** `kyverno.io/v1` `ClusterPolicy` and `Policy` were
-  removed in Kyverno 1.20. They are listed as unsupported and evaluate to
-  `unknown`. Convert them to `ValidatingPolicy`.
+- **Bindings.** A policy with no binding in its source is reported as
+  `unknown`, because it enforces nothing and that is probably a mistake.
+  A policy can have several bindings; it is evaluated through each one that
+  selects the resource.
+- **Enforcement.** It comes from the binding's `validationActions`. `Deny`
+  gives `fail`. `Warn` or `Audit` alone give `warning`.
+- **Every failing validation is reported**, each with the rule id
+  `validations[<index>]`.
+- **No autogen.** A policy that matches only `pods` does not apply to a
+  Deployment. Match the pod controllers in `resourceRules` and find the pod
+  spec with a variable, as in the example above.
+- **Parameters.** With `paramKind` on the policy and `paramRef` on the
+  binding, the parameter object is looked up in the submitted manifests, in
+  `context.resources`, and in the policy source directory. So you can keep
+  parameter objects (a ConfigMap, or your own custom resource) next to the
+  policy. If the object is not found the result is `unknown`, whatever
+  `parameterNotFoundAction` says: offline, "not found" only means "not
+  supplied".
+- **Field and per-result fix.** Add `auditAnnotations` and they are copied
+  into the findings. Use the key `field.<index>` or `remediation.<index>`
+  for one validation. The plain keys `field` and `remediation` are used
+  when exactly one validation failed.
+
+  ```yaml
+  auditAnnotations:
+    - key: field.0
+      valueExpression: "object.kind == 'Pod' ? 'spec.hostNetwork' : 'spec.template.spec.hostNetwork'"
+  ```
+
+- **Errors are never a pass.** A CEL error at evaluation gives `error`, also
+  with `failurePolicy: Ignore`. In a cluster `Ignore` would let the request
+  through without having checked it.
+- **No type checking.** Expressions are compiled without resource schemas.
+  A wrong field name is an `error` when the policy is evaluated, not when it
+  is loaded. Use optional access (`object.spec.?field.orValue(...)`) for
+  fields that may be absent.
+- **Not run offline.** Policies that use the `authorizer` variable evaluate
+  to `unknown`. `MutatingAdmissionPolicy` is listed as unsupported.
+
+## Gatekeeper
+
+Supported: `ConstraintTemplate` (Rego or Kubernetes CEL code), constraints,
+`ExpansionTemplate` and `Config`. Use `engine: gatekeeper` in the config.
+
+A `ConstraintTemplate` holds the logic and enforces nothing by itself. A
+constraint puts it into effect: where it applies, with which parameters and
+with which action. So **each constraint is one policy**, with the id
+`gatekeeper/<constraint kind>/<constraint name>`. Keep a constraint and its
+template in the same source directory.
+
+```yaml
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlimits
+  annotations:
+    metadata.gatekeeper.sh/title: Required resource limits
+    description: Every container must set a limit for each of the listed resources.
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLimits
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            resources:
+              type: array
+              items: {type: string}
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlimits
+
+        violation[{"msg": msg, "details": {"container": container.name}}] {
+          container := input.review.object.spec.containers[_]
+          resource := input.parameters.resources[_]
+          not container.resources.limits[resource]
+          msg := sprintf("container %q must set resources.limits.%s", [container.name, resource])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLimits
+metadata:
+  name: require-memory-limits
+  annotations:
+    kubepolicy.dev/severity: medium
+    kubepolicy.dev/remediation: Set resources.limits.memory on every container.
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+  parameters:
+    resources: ["memory"]
+```
+
+### Annotations
+
+Annotations are read from the constraint first, then from its template. So a
+template can carry the general text and each constraint can override it.
+
+| Annotation | Used for |
+| --- | --- |
+| `kubepolicy.dev/title`, or `metadata.gatekeeper.sh/title` | Title. |
+| `kubepolicy.dev/description`, or `description` | Description. |
+| `kubepolicy.dev/severity`, `/category` | Shown in listings. |
+| `kubepolicy.dev/remediation` | The fix shown with each violation. |
+| `kubepolicy.dev/docs` | Comma-separated documentation links. |
+| `kubepolicy.dev/version`, or `metadata.gatekeeper.sh/version` | Version. |
+| `kubepolicy.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
+
+The `metadata.gatekeeper.sh/*` and `description` annotations are the ones the
+Gatekeeper policy library uses, so its templates work unchanged.
+
+### Things to know
+
+- **Enforcement.** `enforcementAction: deny` (the default) gives `fail`.
+  `warn` and `dryrun` give `warning`. With `scoped`, the actions for the
+  admission enforcement point (`validation.gatekeeper.sh`) are used; a
+  constraint with no action there is `not_applicable`.
+- **Every violation is reported.**
+- **Matching.** `spec.match` is evaluated by Gatekeeper's own code: `kinds`,
+  `namespaces`, `excludedNamespaces`, `labelSelector`, `namespaceSelector`,
+  `scope`, `name` and `source`. A `namespaceSelector` needs the namespace
+  labels in the context; without them the result is `unknown`.
+- **Parameters.** `spec.parameters` is checked against the template's
+  schema when the source is loaded. A constraint that does not fit is listed
+  with the error and evaluates to `error`.
+- **Pod controllers.** A constraint that matches `Pod` does not select a
+  Deployment. Either match the controller kinds and find the pod spec in the
+  template code, or add an `ExpansionTemplate` to the source. With one,
+  Gatekeeper also checks the Pod a workload would create, and prefixes those
+  violations with `[Implied by <expansion template>]`.
+- **Field and per-result fix.** If a violation's `details` holds a `field`
+  or `remediation` string, it is copied into the finding. Other details are
+  kept under `details`.
+- **Referential constraints.** Templates can read other objects through
+  `data.inventory`. The inventory holds the submitted manifests, the known
+  namespaces and `context.resources`. A template that reads it requires
+  `context.resources`; without it the result is `unknown`, because the
+  server cannot know what else is in the cluster.
+- **Exclusions.** A `Config` resource in the source can exclude namespaces
+  (`spec.match` with process `webhook` or `*`). Resources there are
+  `exempted` for every constraint of that source.
+- **Unused templates.** A template that no constraint in the source uses is
+  only reported as a load warning.
+- **Not run offline.** `http.send`, `net.lookup_ip_addr` and `opa.runtime`
+  are removed. Templates that call `external_data` evaluate to `unknown`.
+- **Mutators.** `Assign`, `AssignMetadata`, `ModifySet` and `AssignImage`
+  are only applied to resources generated by an `ExpansionTemplate`.
 
 ## Checking your policies
 
@@ -193,7 +350,8 @@ kube-policy-mcp policies --policy-pack my-pack
 ```
 
 A policy that failed to load is listed with `[NOT EVALUABLE: ...]` and the
-reason. Keep a compliant and a non-compliant manifest next to each policy and
+reason. Load warnings, such as an unused template or an ignored file, are
+listed under `Notes`, here and in every evaluation result. Keep a compliant and a non-compliant manifest next to each policy and
 evaluate both in CI:
 
 ```bash

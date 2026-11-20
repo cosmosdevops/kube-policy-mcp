@@ -3,15 +3,16 @@
 An MCP server that lets AI coding agents check Kubernetes manifests against
 your organisation's policies **before** anything is deployed.
 
-- Evaluates real **OPA/Rego** and **Kyverno** policies using the upstream engines.
+- Evaluates real **OPA/Rego**, **OPA Gatekeeper** and Kubernetes
+  **ValidatingAdmissionPolicy** policies using the upstream engines.
 - Works **offline**. It never talks to a cluster and never applies anything.
 - Tells the agent *what* failed, *why*, and *how to fix it*, so the agent can
   correct its manifest and check again.
 - Is honest about what it could not check. A policy that does not apply, could
   not be decided, or crashed is never reported as a pass.
 
-- Engines are **plug-ins**. Build with both, or with only the one you use
-  (an OPA-only binary is about 36 MB instead of 129 MB).
+- Engines are **plug-ins**. Build with all three, or with only the one you use
+  (an OPA-only binary is about 34 MB instead of 99 MB).
 
 It does **not** validate Kubernetes schemas. Use a schema validator
 (for example with the KubernetesJSONSchema schemas) for that.
@@ -86,7 +87,7 @@ command and arguments; see [examples/mcp/generic-client.json](examples/mcp/gener
   "complete": true,
   "compliant": false,
   "policyPack": "platform-baseline",
-  "summary": { "resourcesEvaluated": 1, "policiesEvaluated": 11, "violations": 14, "warnings": 3, "unknown": 0, "errors": 0, "exempted": 0, "passed": 0, "notApplicable": 0 },
+  "summary": { "resourcesEvaluated": 1, "policiesEvaluated": 11, "violations": 15, "warnings": 3, "unknown": 0, "errors": 0, "exempted": 0, "passed": 0, "notApplicable": 0 },
   "findings": [
     {
       "id": "f-3fa9c21b-006",
@@ -145,8 +146,10 @@ policyPacks:
     sources:
       - engine: opa
         path: ./policies/rego
-      - engine: kyverno
-        path: ./policies/kyverno
+      - engine: vap
+        path: ./policies/vap
+      - engine: gatekeeper
+        path: ./policies/gatekeeper
   - name: production
     extends: [platform-baseline]
     sources:
@@ -167,13 +170,19 @@ Engines are self-contained adapters. See [docs/engines.md](docs/engines.md).
 kube-policy-mcp engines
 ```
 
-- **Build time**: `make build` includes OPA and Kyverno. `make build-opa` and
-  `make build-kyverno` build a single-engine binary.
+| Engine | `engine:` | A source directory holds |
+| --- | --- | --- |
+| OPA / Rego | `opa` | `.rego` files following Conftest conventions (`deny`, `violation`, `warn`). |
+| Kubernetes ValidatingAdmissionPolicy | `vap` | `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` resources, plus any parameter objects. |
+| OPA Gatekeeper | `gatekeeper` | `ConstraintTemplate` resources and their constraints, plus optional `ExpansionTemplate` and `Config` resources. |
+
+- **Build time**: `make build` includes all three. `make build-opa`,
+  `make build-vap` and `make build-gatekeeper` build a single-engine binary.
 - **Run time**: turn an engine off in the config.
 
   ```yaml
   engines:
-    kyverno:
+    gatekeeper:
       enabled: false
   ```
 
@@ -182,8 +191,14 @@ kube-policy-mcp engines
 
 ### Packs, identity and precedence
 
-- A policy's id is `<engine>/<native name>`: `opa/<rego package>`,
-  `kyverno/<name>` or `kyverno/<namespace>/<name>` for namespaced policies.
+- A policy's id is `<engine>/<native name>`:
+  - `opa/<rego package>`
+  - `vap/<policy name>`
+  - `gatekeeper/<constraint kind>/<constraint name>`
+- For the two admission engines, a policy is what is actually enforced. A
+  `ValidatingAdmissionPolicy` is evaluated through its bindings, and a
+  Gatekeeper constraint through its template. A policy with no binding is
+  reported as `unknown`; a template with no constraint is only a load warning.
 - `extends` is resolved depth-first, parents before children. Each pack is
   used once, at its first position. A cycle is an error.
 - If two sources supply the same policy id, the one processed **later** wins.
@@ -196,7 +211,8 @@ kube-policy-mcp engines
 
 ### Exemptions
 
-- **Kyverno**: native `PolicyException` resources placed in a Kyverno source.
+- **Gatekeeper**: a `Config` resource in a Gatekeeper source can exclude
+  namespaces from admission (`spec.match`, process `webhook` or `*`).
 - **Any engine**: pack-level `exemptions` in the config, selected by policy id
   and by resource kind, namespace and name (with `*` wildcards). They need a
   `reason` and may have an `expires` date.
@@ -251,7 +267,7 @@ cat app.yaml | kube-policy-mcp evaluate --file - --namespace payments
 kube-policy-mcp packs
 kube-policy-mcp engines
 kube-policy-mcp policies --kind Deployment
-kube-policy-mcp policy kyverno/require-run-as-non-root --definition
+kube-policy-mcp policy vap/require-run-as-non-root --definition
 ```
 
 `evaluate` exit codes: `0` compliant, `1` violations, `2` incomplete
@@ -261,34 +277,41 @@ runtime error.
 ## Example policy library
 
 [examples/policies](examples/policies) holds a working baseline using real
-Rego and Kyverno policies.
+Rego, ValidatingAdmissionPolicy and Gatekeeper policies.
 
 | # | Requirement | Policy |
 | --- | --- | --- |
 | 1 | Required ownership labels | `opa/kubernetes.required_owner_labels` |
-| 2 | Required resource requests and limits | `opa/kubernetes.resource_limits`, `kyverno/require-memory-limits` |
-| 3 | Restricted container privileges | `kyverno/disallow-privileged-containers` |
+| 2 | Required resource requests and limits | `opa/kubernetes.resource_limits`, `gatekeeper/K8sRequiredLimits/require-memory-limits` |
+| 3 | Restricted container privileges | `vap/disallow-privileged-containers` |
 | 4 | Approved container registries | `opa/kubernetes.approved_registries` (list in `data.yaml`) |
-| 5 | Prohibited host networking | `kyverno/disallow-host-namespaces` |
+| 5 | Prohibited host networking | `vap/disallow-host-namespaces` |
 | 6 | Required health probes | `opa/kubernetes.health_probes` (readiness denies, liveness warns) |
-| 7 | Non-root container execution | `kyverno/require-run-as-non-root` |
+| 7 | Non-root container execution | `vap/require-run-as-non-root` |
 | 8 | Restricted namespaces | `opa/kubernetes.restricted_namespaces` |
 | 9 | Required workload labels | `opa/kubernetes.workload_labels` (warn only) |
-| 10 | Restrictions on hostPath volumes | `kyverno/restrict-hostpath-volumes` |
+| 10 | Restrictions on hostPath volumes | `gatekeeper/K8sDisallowHostPath/restrict-hostpath-volumes` |
 
 The `production` pack adds three context-dependent policies:
-`opa/production.min_replicas`, `kyverno/disallow-latest-tag-in-production`
-(both need namespace labels) and `kyverno/require-registered-team`
-(looks up a ConfigMap).
+`opa/production.min_replicas` and
+`gatekeeper/K8sDisallowedTags/disallow-latest-tag-in-production` (both need
+namespace labels), and `vap/require-registered-team` (takes a ConfigMap as
+its parameter).
+
+The two admission engines cover pod controllers in different ways, and the
+examples show both. The `vap` policies match Deployments and the other
+controllers themselves and find the pod spec inside each kind. The Gatekeeper
+constraints match Pods, and an `ExpansionTemplate` makes Gatekeeper also check
+the Pod that a Deployment would create.
 
 Fixtures in [examples/manifests](examples/manifests):
 
 | Fixture | Shows |
 | --- | --- |
 | `compliant/web.yaml` | Passes. The Service is `not_applicable` for the pod policies. |
-| `noncompliant/web.yaml` | Many policies from both engines failing on one resource. |
+| `noncompliant/web.yaml` | Many policies from all three engines failing on one resource. |
 | `multi/app.yaml` | Several resources in one file with different outcomes. |
-| `exemptions/node-exporter.yaml` | A Kyverno `PolicyException` and a pack exemption being honoured. |
+| `exemptions/node-exporter.yaml` | Two pack exemptions being honoured. |
 | `production/checkout.yaml` | `unknown` without context; passes with `production/context.yaml`. |
 
 ## Security
@@ -300,8 +323,10 @@ Fixtures in [examples/manifests](examples/manifests):
 - Policy sources come only from the config file.
 - Rego policies that use `http.send`, `net.lookup_ip_addr` or `opa.runtime`
   fail to compile, and the result is `error`.
-- Kyverno policies that use the `http` library, image registry lookups or
-  resource writes are not run; the result is `unknown`.
+- Gatekeeper templates run with the same builtins removed. Templates that
+  call `external_data` are not run; the result is `unknown`.
+- Admission policies that use the `authorizer` variable are not run; the
+  result is `unknown`.
 - Input sizes, file counts and evaluation time are bounded.
 - Values of `Secret` resources are removed from messages and explanations.
 - Engine failures, timeouts and panics become `error` findings.
@@ -311,14 +336,14 @@ Fixtures in [examples/manifests](examples/manifests):
 Read [docs/architecture.md](docs/architecture.md#known-offline-limitations)
 for the full list. The main ones:
 
-- Kyverno support covers `ValidatingPolicy`, `NamespacedValidatingPolicy` and
-  `PolicyException` from `policies.kyverno.io`. Kyverno 1.20 removed the
-  legacy `kyverno.io` `ClusterPolicy`; such files are listed as unsupported
-  and evaluate to `unknown` with a migration hint.
-- Kubernetes `ValidatingAdmissionPolicy`, Gatekeeper and cluster policy
-  discovery are designed but not implemented.
-- Kyverno stops at the first failing validation of a policy, so one finding
-  per policy and resource is normal.
+- A `ValidatingAdmissionPolicy` has no autogen. A policy that matches only
+  pods does not apply to Deployments. Match the controllers in the policy.
+- A `ValidatingAdmissionPolicy` and its binding, or a Gatekeeper constraint
+  and its template, must be in the same source directory.
+- Gatekeeper templates that read `data.inventory` need `context.resources`.
+  Without it the result is `unknown`.
+- Mutation is not simulated. Policies see the manifest as written.
+- Cluster policy discovery is designed but not implemented.
 - Rego has no native notion of "this policy applies to that kind". Declare
   `custom.kinds` (or an `applies` rule) or the policy is treated as applying
   to everything.
@@ -327,7 +352,7 @@ for the full list. The main ones:
 
 - [docs/architecture.md](docs/architecture.md) — design, libraries, interfaces, limitations, planned extensions.
 - [docs/engines.md](docs/engines.md) — how engines plug in, single-engine builds, adding an engine.
-- [docs/policy-authoring.md](docs/policy-authoring.md) — how to write Rego and Kyverno policies for this server.
+- [docs/policy-authoring.md](docs/policy-authoring.md) — how to write Rego, ValidatingAdmissionPolicy and Gatekeeper policies for this server.
 - [docs/agent-workflow.md](docs/agent-workflow.md) — the end-to-end agent workflow with real output.
 
 ## Development
