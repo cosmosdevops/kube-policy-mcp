@@ -342,3 +342,7 @@ make vet
 
 The tests in [tests](tests) build the binary and drive it over MCP stdio,
 the same way a client does.
+
+## Licence
+
+Apache License 2.0. See [LICENSE](LICENSE).
