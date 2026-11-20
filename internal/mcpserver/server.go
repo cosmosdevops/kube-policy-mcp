@@ -69,7 +69,7 @@ func New(a *app.App) (*Server, *mcp.Server) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_policy_packs",
-		Description: "List the configured policy packs (named sets of policies), the default pack, and the policy engines available in this server with their limitations.",
+		Description: "List the configured policy packs (named sets of policies), the default pack, and the policy engines available in this server. Set includeLimitations only when asked what an engine cannot do offline.",
 		Annotations: readOnly,
 	}, s.listPacks)
 	mcp.AddTool(srv, &mcp.Tool{
@@ -104,22 +104,33 @@ func ptr[T any](v T) *T { return &v }
 
 // ---- list_policy_packs ----
 
-type listPacksInput struct{}
+type listPacksInput struct {
+	IncludeLimitations bool `json:"includeLimitations,omitempty" jsonschema:"also return each engine's description, source format and offline limitations. Leave this out for normal use: a finding already says when a limitation affected it."`
+}
 
 type listPacksOutput struct {
 	DefaultPolicyPack string `json:"defaultPolicyPack,omitempty"`
 	// Engines lists the names of the engines that can be used.
 	Engines []string `json:"engines"`
-	// EngineDetails describes every engine in this build.
+	// EngineDetails names every engine in this build with its version and
+	// whether it is enabled. The longer descriptive fields are only filled
+	// when the caller asks for them.
 	EngineDetails []engines.Info   `json:"engineDetails"`
 	PolicyPacks   []packs.PackInfo `json:"policyPacks"`
 }
 
-func (s *Server) listPacks(ctx context.Context, _ *mcp.CallToolRequest, _ listPacksInput) (*mcp.CallToolResult, listPacksOutput, error) {
+func (s *Server) listPacks(ctx context.Context, _ *mcp.CallToolRequest, in listPacksInput) (*mcp.CallToolResult, listPacksOutput, error) {
+	details := make([]engines.Info, len(s.app.Engines))
+	for i, e := range s.app.Engines {
+		if !in.IncludeLimitations {
+			e.Description, e.SourceFormat, e.NativeExceptions, e.Limitations = "", "", "", nil
+		}
+		details[i] = e
+	}
 	return nil, listPacksOutput{
 		DefaultPolicyPack: s.app.Registry.DefaultPack(),
 		Engines:           s.app.Registry.EngineNames(),
-		EngineDetails:     s.app.Engines,
+		EngineDetails:     details,
 		PolicyPacks:       s.app.Registry.Packs(),
 	}, nil
 }

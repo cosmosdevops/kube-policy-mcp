@@ -680,10 +680,17 @@ func TestSingleEngineBuilds(t *testing.T) {
 					Limitations                  []string
 				} `json:"engineDetails"`
 			}
+			// By default the engine is named with its version, without the
+			// long list of limitations.
 			call(t, session, "list_policy_packs", nil, &packs)
 			if len(packs.Engines) != 1 || packs.Engines[0] != v.engine || len(packs.EngineDetails) != 1 ||
-				!packs.EngineDetails[0].Enabled || packs.EngineDetails[0].UpstreamVersion == "" || len(packs.EngineDetails[0].Limitations) == 0 {
+				!packs.EngineDetails[0].Enabled || packs.EngineDetails[0].Title == "" || packs.EngineDetails[0].UpstreamVersion == "" || len(packs.EngineDetails[0].Limitations) != 0 {
 				t.Errorf("list_policy_packs = %+v", packs)
+			}
+			// The limitations are there when asked for.
+			call(t, session, "list_policy_packs", map[string]any{"includeLimitations": true}, &packs)
+			if len(packs.EngineDetails) != 1 || len(packs.EngineDetails[0].Limitations) == 0 {
+				t.Errorf("list_policy_packs with limitations = %+v", packs)
 			}
 			if instr := session.InitializeResult().Instructions; !strings.Contains(instr, packs.EngineDetails[0].Title) {
 				t.Errorf("server instructions do not name the engine: %s", instr)

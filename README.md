@@ -72,7 +72,7 @@ command and arguments; see [examples/mcp/generic-client.json](examples/mcp/gener
 
 | Tool | What it does |
 | --- | --- |
-| `list_policy_packs` | Lists the configured packs, the default pack, and the engines in this server with their limitations. |
+| `list_policy_packs` | Lists the configured packs, the default pack, and the engines in this server. Pass `includeLimitations: true` to also get each engine's offline limitations. |
 | `list_policies` | Lists the policies of a pack. Filter by engine, kind, severity or namespace. |
 | `get_policy` | Shows one policy: purpose, rules, matching, enforcement, exceptions, required context, remediation. Can include the source. |
 | `evaluate_manifests` | Evaluates inline YAML/JSON or workspace files against a pack. |
