@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,7 @@ func newRoot(stdin io.Reader) *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&g.config, "config", "", "config file (default: $"+app.ConfigEnv+" or ./"+app.DefaultConfigFile+")")
 	root.PersistentFlags().StringArrayVar(&g.roots, "workspace-root", nil, "extra directory the MCP server may read manifests from (repeatable)")
-	root.AddCommand(serveCmd(g), evaluateCmd(g, stdin), packsCmd(g), policiesCmd(g), policyCmd(g), enginesCmd(), versionCmd())
+	root.AddCommand(serveCmd(g), newKeyCmd(), checkHealthCmd(), evaluateCmd(g, stdin), packsCmd(g), policiesCmd(g), policyCmd(g), enginesCmd(), versionCmd())
 	return root
 }
 
@@ -129,17 +130,90 @@ func enginesCmd() *cobra.Command {
 }
 
 func serveCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
+	var (
+		addr, keysFile string
+		perMinute      float64
+		burst          int
+	)
+	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the MCP server on stdio",
-		Args:  cobra.NoArgs,
+		Short: "Run the MCP server on stdio, or over HTTP with --http",
+		Long: `Run the MCP server.
+
+With no flags it talks MCP over stdin/stdout, for an agent to run locally.
+
+With --http it serves MCP over HTTP at /mcp, for hosting. Callers need an API
+key from the --keys file, and each key has its own rate limit. Make keys with
+the new-key command. /healthz is open and needs no key.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := g.app()
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "kube-policy-mcp %s: serving MCP on stdio (engines: %s; workspace roots: %s)\n", app.Version, strings.Join(a.Registry.EngineNames(), ", "), strings.Join(a.Workspace.Roots(), ", "))
-			return mcpserver.Run(cmd.Context(), a)
+			about := fmt.Sprintf("engines: %s; workspace roots: %s", strings.Join(a.Registry.EngineNames(), ", "), strings.Join(a.Workspace.Roots(), ", "))
+			if addr == "" {
+				if keysFile != "" {
+					return errors.New("--keys only applies with --http")
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "kube-policy-mcp %s: serving MCP on stdio (%s)\n", app.Version, about)
+				return mcpserver.Run(cmd.Context(), a)
+			}
+			if keysFile == "" {
+				return errors.New("--http needs --keys: the hosted server only answers callers with an API key")
+			}
+			log.SetFlags(0)
+			log.SetOutput(cmd.ErrOrStderr())
+			log.Printf("kube-policy-mcp %s: serving MCP on http://%s/mcp, %g requests a minute per key (%s)", app.Version, addr, perMinute, about)
+			return mcpserver.RunHTTP(cmd.Context(), a, mcpserver.HTTPOptions{
+				Addr: addr, KeysFile: keysFile, PerMinute: perMinute, Burst: burst, MaxInput: a.Config.Limits.MaxManifestBytes,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&addr, "http", "", "serve MCP over HTTP on this address (e.g. 127.0.0.1:8088) instead of stdin/stdout; needs --keys")
+	cmd.Flags().StringVar(&keysFile, "keys", "", "file of API keys for --http, one \"name sha256\" per line; add lines with the new-key command")
+	cmd.Flags().Float64Var(&perMinute, "rate", 60, "with --http: requests each API key may make per minute")
+	cmd.Flags().IntVar(&burst, "burst", 30, "with --http: requests each API key may make at once before the rate applies")
+	return cmd
+}
+
+// newKeyCmd makes an API key for the hosted mode. It needs no config file.
+func newKeyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "new-key NAME",
+		Short: "Make an API key for serve --http",
+		Long: `Make an API key for a named holder.
+
+The key is printed once on stderr, for you to pass on. The line for the keys
+file is printed on stdout, so it can be appended:
+
+  kube-policy-mcp new-key alice >> /etc/kube-policy-mcp/keys
+
+The keys file holds the name and the SHA-256 of each key, never the key
+itself. To revoke a key, delete its line.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key, line, err := mcpserver.NewKey(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "API key for %s (shown once, it is not stored):\n\n  %s\n\n", args[0], key)
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+			return nil
+		},
+	}
+}
+
+// checkHealthCmd asks a running server whether it is up. Container images
+// have no curl to do this with.
+func checkHealthCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check-health URL",
+		Short: "Check a running server's health URL; for container health checks",
+		Long:  "Ask a running server's health URL (e.g. http://127.0.0.1:8088/healthz) and exit 0 if it is up.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return mcpserver.CheckHealth(args[0])
 		},
 	}
 }

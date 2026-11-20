@@ -56,15 +56,37 @@ const maxHistory = 50
 type Server struct {
 	app *app.App
 
+	// Past evaluations are kept per caller for explain_violation. Over stdio
+	// there is one caller, "". Over HTTP each API key holder has their own,
+	// so one holder cannot read another's results.
 	mu      sync.Mutex
-	history map[string]*evaluator.Result
+	history map[string]*callerHistory
+}
+
+type callerHistory struct {
+	results map[string]*evaluator.Result
 	order   []string
+}
+
+// caller names who made a request: the API key holder over HTTP, or "" over
+// stdio.
+func caller(req *mcp.CallToolRequest) string {
+	if req == nil || req.Extra == nil || req.Extra.Header == nil {
+		return ""
+	}
+	return req.Extra.Header.Get(holderHeader)
 }
 
 // New creates the MCP server with all tools registered.
 func New(a *app.App) (*Server, *mcp.Server) {
-	s := &Server{app: a, history: map[string]*evaluator.Result{}}
-	srv := mcp.NewServer(&mcp.Implementation{Name: "kube-policy-mcp", Title: "Kubernetes Policy Evaluation", Version: app.Version}, &mcp.ServerOptions{Instructions: instructionsFor(a.Engines)})
+	s := &Server{app: a, history: map[string]*callerHistory{}}
+	srv := mcp.NewServer(&mcp.Implementation{Name: "kube-policy-mcp", Title: "Kubernetes Policy Evaluation", Version: app.Version}, &mcp.ServerOptions{
+		Instructions: instructionsFor(a.Engines),
+		// The tool list never changes while the server runs. Saying so
+		// stops clients from holding a connection open to wait for changes,
+		// which over HTTP ties up a connection per client.
+		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
+	})
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: ptr(false)}
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -233,7 +255,7 @@ type evaluateManifestsInput struct {
 	Options    *evalOptions     `json:"options,omitempty"`
 }
 
-func (s *Server) evaluateManifests(ctx context.Context, _ *mcp.CallToolRequest, in evaluateManifestsInput) (*mcp.CallToolResult, *findings.Report, error) {
+func (s *Server) evaluateManifests(ctx context.Context, req *mcp.CallToolRequest, in evaluateManifestsInput) (*mcp.CallToolResult, *findings.Report, error) {
 	if strings.TrimSpace(in.Manifests) == "" && len(in.Files) == 0 {
 		return nil, nil, errors.New("provide inline YAML in 'manifests' or workspace paths in 'files'")
 	}
@@ -256,7 +278,7 @@ func (s *Server) evaluateManifests(ctx context.Context, _ *mcp.CallToolRequest, 
 	if lim.MaxResources > 0 && len(resources) > lim.MaxResources {
 		return nil, nil, fmt.Errorf("more than %d resources in one request", lim.MaxResources)
 	}
-	res, err := s.evaluate(ctx, resources, in.PolicyPack, in.Policies, in.Context, in.Options, nil)
+	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, in.Policies, in.Context, in.Options, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -286,7 +308,7 @@ type DirectoryReport struct {
 	Notes         []string                `json:"notes,omitempty"`
 }
 
-func (s *Server) evaluateDirectory(ctx context.Context, _ *mcp.CallToolRequest, in evaluateDirectoryInput) (*mcp.CallToolResult, *DirectoryReport, error) {
+func (s *Server) evaluateDirectory(ctx context.Context, req *mcp.CallToolRequest, in evaluateDirectoryInput) (*mcp.CallToolResult, *DirectoryReport, error) {
 	if in.Directory == "" {
 		return nil, nil, errors.New("directory is required")
 	}
@@ -297,7 +319,7 @@ func (s *Server) evaluateDirectory(ctx context.Context, _ *mcp.CallToolRequest, 
 	if len(resources) == 0 {
 		return nil, nil, fmt.Errorf("no Kubernetes manifests found under %s (%d file(s) skipped)", in.Directory, len(skipped))
 	}
-	res, err := s.evaluate(ctx, resources, in.PolicyPack, in.Policies, in.Context, in.Options, skipped)
+	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, in.Policies, in.Context, in.Options, skipped)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -319,7 +341,7 @@ func Directory(res *evaluator.Result, dir string) *DirectoryReport {
 	}
 }
 
-func (s *Server) evaluate(ctx context.Context, resources []manifests.Resource, pack string, policies []string, ec *evalctx.Context, opts *evalOptions, skipped []findings.SkippedFile) (*evaluator.Result, error) {
+func (s *Server) evaluate(ctx context.Context, who string, resources []manifests.Resource, pack string, policies []string, ec *evalctx.Context, opts *evalOptions, skipped []findings.SkippedFile) (*evaluator.Result, error) {
 	req := evaluator.Request{Resources: resources, Pack: pack, PolicyIDs: policies, SkippedFiles: skipped}
 	if ec != nil {
 		req.Context = *ec
@@ -331,19 +353,24 @@ func (s *Server) evaluate(ctx context.Context, resources []manifests.Resource, p
 	if err != nil {
 		return nil, err
 	}
-	s.remember(res)
+	s.remember(who, res)
 	return res, nil
 }
 
-func (s *Server) remember(res *evaluator.Result) {
+func (s *Server) remember(who string, res *evaluator.Result) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	h := s.history[who]
+	if h == nil {
+		h = &callerHistory{results: map[string]*evaluator.Result{}}
+		s.history[who] = h
+	}
 	id := res.Report.EvaluationID
-	s.history[id] = res
-	s.order = append(s.order, id)
-	for len(s.order) > maxHistory {
-		delete(s.history, s.order[0])
-		s.order = s.order[1:]
+	h.results[id] = res
+	h.order = append(h.order, id)
+	for len(h.order) > maxHistory {
+		delete(h.results, h.order[0])
+		h.order = h.order[1:]
 	}
 }
 
@@ -353,14 +380,18 @@ type explainInput struct {
 	FindingID string `json:"findingId" jsonschema:"the id of a finding from an earlier evaluation, for example f-1a2b3c4d-003"`
 }
 
-func (s *Server) explainViolation(ctx context.Context, _ *mcp.CallToolRequest, in explainInput) (*mcp.CallToolResult, *evaluator.Explanation, error) {
+func (s *Server) explainViolation(ctx context.Context, req *mcp.CallToolRequest, in explainInput) (*mcp.CallToolResult, *evaluator.Explanation, error) {
 	// Finding ids have the form f-<evaluationId>-<number>.
 	parts := strings.Split(in.FindingID, "-")
 	if len(parts) != 3 || parts[0] != "f" {
 		return nil, nil, fmt.Errorf("%q is not a finding id; use the id field of a finding returned by evaluate_manifests", in.FindingID)
 	}
 	s.mu.Lock()
-	res, ok := s.history[parts[1]]
+	var res *evaluator.Result
+	ok := false
+	if h := s.history[caller(req)]; h != nil {
+		res, ok = h.results[parts[1]]
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, nil, fmt.Errorf("evaluation %s is no longer available (only the last %d evaluations of this session are kept); evaluate again and use the new finding id", parts[1], maxHistory)
@@ -376,4 +407,33 @@ func (s *Server) explainViolation(ctx context.Context, _ *mcp.CallToolRequest, i
 func Run(ctx context.Context, a *app.App) error {
 	_, srv := New(a)
 	return srv.Run(ctx, &mcp.StdioTransport{})
+}
+
+// HTTPOptions configures the hosted mode.
+type HTTPOptions struct {
+	// Addr is the address to listen on, for example 127.0.0.1:8088.
+	Addr string
+	// KeysFile holds the API keys: one "name sha256" pair per line.
+	KeysFile string
+	// PerMinute and Burst set each key's request budget.
+	PerMinute float64
+	Burst     int
+	// MaxInput is the largest manifest input accepted, in bytes.
+	MaxInput int64
+}
+
+// RunHTTP serves MCP over HTTP to holders of an API key until ctx ends.
+func RunHTTP(ctx context.Context, a *app.App, opts HTTPOptions) error {
+	if opts.KeysFile == "" {
+		return errors.New("--http needs --keys: the hosted server only answers callers with an API key")
+	}
+	if opts.PerMinute <= 0 || opts.Burst < 1 {
+		return errors.New("--rate must be above 0 and --burst at least 1")
+	}
+	keys, err := OpenKeyStore(opts.KeysFile)
+	if err != nil {
+		return fmt.Errorf("reading API keys: %w", err)
+	}
+	_, srv := New(a)
+	return ServeHTTP(ctx.Done(), opts.Addr, NewHTTPHandler(srv, keys, NewLimiters(opts.PerMinute, opts.Burst), opts.MaxInput))
 }

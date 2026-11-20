@@ -11,6 +11,8 @@ your organisation's policies **before** anything is deployed.
 - Is honest about what it could not check. A policy that does not apply, could
   not be decided, or crashed is never reported as a pass.
 
+- Runs **locally** over stdio, or **hosted** over HTTP with an API key per
+  caller. See [Host it](#host-it).
 - Engines are **plug-ins**. Build with all three, or with only the one you use
   (an OPA-only binary is about 34 MB instead of 99 MB).
 
@@ -67,6 +69,8 @@ claude mcp add kube-policy -- /usr/local/bin/kube-policy-mcp serve --config /etc
 
 Other MCP clients (Claude Desktop, Cursor, VS Code and so on) use the same
 command and arguments; see [examples/mcp/generic-client.json](examples/mcp/generic-client.json).
+
+To use a hosted server instead, see [Host it](#host-it).
 
 ### Tools
 
@@ -220,6 +224,84 @@ kube-policy-mcp engines
 An exemption turns `fail` or `warning` into `exempted`. It never hides an
 `unknown` or an `error`.
 
+## Host it
+
+One copy of the server can serve many agents over HTTP. With `--http`, it
+serves MCP at `/mcp`. It only answers callers who send an API key, and each
+key has its own rate limit.
+
+```bash
+kube-policy-mcp serve --config /etc/kube-policy-mcp/kube-policy-mcp.yaml --http 127.0.0.1:8088 --keys /etc/kube-policy-mcp/keys
+```
+
+### API keys
+
+Make a key for each person or team:
+
+```bash
+sudo sh -c 'kube-policy-mcp new-key alice >> /etc/kube-policy-mcp/keys'
+```
+
+This prints the key once, for you to pass on, and adds a line to the keys
+file. The file holds a name and the SHA-256 of each key, never the key
+itself, so a lost key can't be recovered: make a new one.
+
+```text
+# /etc/kube-policy-mcp/keys
+alice 5f2b…e91c
+ci-pipeline 9a40…77d2
+```
+
+To revoke a key, delete its line. The server notices changes to the file
+within a few seconds, with no restart. If an edit leaves the file broken, it
+keeps using the keys it had and logs why.
+
+### Rate limits
+
+Each key may make 60 requests a minute, and up to 30 at once before that rate
+applies. Change this with `--rate` and `--burst`. One key's use doesn't
+affect another's. Requests without a valid key get `401`, and requests over
+the limit get `429` with a `Retry-After` header.
+
+### Connecting an agent
+
+```bash
+claude mcp add --transport http kube-policy https://example.com/mcp --header "Authorization: Bearer <key>"
+```
+
+Or in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "kube-policy": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer <key>"}
+    }
+  }
+}
+```
+
+### Things to know
+
+- **Serve it over HTTPS only.** The key travels in a header on every request.
+  Listen on `127.0.0.1` and put a reverse proxy with TLS in front.
+- `/healthz` needs no key. `kube-policy-mcp check-health http://127.0.0.1:8088/healthz`
+  exits 0 when the server is up; use it for container health checks.
+- The server logs one line per request: the key's name, the status and the
+  time taken. It never logs the request body.
+- Each key holder only sees their own evaluations. `explain_violation` cannot
+  be used to read a finding from another holder's evaluation.
+- Callers normally send manifests inline. The `files` and
+  `evaluate_directory` inputs read from the **server's** workspace roots, so
+  leave `workspaceRoots` out of the config unless you want callers to read
+  those directories.
+- Every call stands alone (stateless HTTP), so the server can sit behind a
+  proxy or a load balancer. The history for `explain_violation` is kept in
+  memory per process, so with several copies an explanation may need the
+  evaluation to be run again.
+
 ## Evaluation context
 
 A policy may need more than the manifest. Pass that as `context`. These are
@@ -264,6 +346,9 @@ kube-policy-mcp evaluate --file deployment.yaml --policy-pack platform-baseline
 kube-policy-mcp evaluate --dir ./k8s --output json
 kube-policy-mcp evaluate --file app.yaml --policy-pack production --context-file context.yaml --explain
 cat app.yaml | kube-policy-mcp evaluate --file - --namespace payments
+kube-policy-mcp serve --http 127.0.0.1:8088 --keys ./keys
+kube-policy-mcp new-key alice >> ./keys
+kube-policy-mcp check-health http://127.0.0.1:8088/healthz
 kube-policy-mcp packs
 kube-policy-mcp engines
 kube-policy-mcp policies --kind Deployment
@@ -317,6 +402,8 @@ Fixtures in [examples/manifests](examples/manifests):
 ## Security
 
 - Offline by default. There is no cluster client in the evaluation path.
+- Hosted mode needs an API key on every request. Keys are stored only as
+  SHA-256 hashes, and each key is rate limited.
 - No shell execution. MCP arguments are never passed to a shell.
 - Files are only read inside the workspace roots. Symlinks are resolved
   before the check, and directory walks do not follow them.

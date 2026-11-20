@@ -8,6 +8,7 @@ require (
 	github.com/open-policy-agent/gatekeeper/v3 v3.23.1
 	github.com/open-policy-agent/opa v1.22.4
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/time v0.16.0
 	k8s.io/api v0.36.6
 	k8s.io/apimachinery v0.36.6
 	k8s.io/apiserver v0.36.6
@@ -106,7 +107,6 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/grpc v1.85.0 // indirect

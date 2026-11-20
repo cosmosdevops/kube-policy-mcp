@@ -52,7 +52,7 @@ Decisions worth knowing about:
 ```text
 cmd/kube-policy-mcp        main: runs the CLI
 internal/cli               cobra commands (serve, evaluate, packs, policies, policy)
-internal/mcpserver         MCP tools; no policy logic
+internal/mcpserver         MCP tools; stdio and hosted HTTP transport with API keys; no policy logic
 internal/app               wires config, registered engines, pack registry, evaluator
 internal/engines           engine plug-in registry (adapters register themselves)
 internal/engines/builtin   links the adapters in; one build-tagged file per engine
@@ -288,4 +288,3 @@ A read-only `discover` command and a `discover_cluster_policies` tool.
 - `test_policy`: evaluate a proposed policy against positive and negative fixtures.
 - Remote policy distribution: fetch signed bundles ahead of time into a local
   directory; evaluation stays offline.
-- HTTP transport for shared deployments.
