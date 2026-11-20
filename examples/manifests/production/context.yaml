@@ -1,0 +1,24 @@
+# Simulated evaluation context for production/checkout.yaml.
+# These values are supplied by the caller. They are not read from a cluster.
+kubernetesVersion: "1.35"
+namespace:
+  name: checkout
+  labels:
+    environment: production
+    team: checkout
+operation: CREATE
+user:
+  username: developer@example.com
+  groups:
+    - developers
+variables:
+  environment: production
+resources:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: registered-teams
+      namespace: platform-system
+    data:
+      checkout: "true"
+      payments: "true"

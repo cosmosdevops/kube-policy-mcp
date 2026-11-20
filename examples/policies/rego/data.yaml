@@ -1,0 +1,4 @@
+# Policy data for the baseline Rego policies. Loaded at the data root.
+approved_registries:
+  - registry.example.com/
+  - ghcr.io/example-org/

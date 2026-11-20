@@ -1,0 +1,33 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Non-root container execution
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must run as a non-root user. runAsNonRoot must be true at the pod level or on every container.
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Set spec.securityContext.runAsNonRoot to true in the pod spec, or set securityContext.runAsNonRoot to true on every container.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: allContainers
+      expression: >-
+        object.spec.containers
+        + object.spec.?initContainers.orValue([])
+        + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        object.spec.?securityContext.?runAsNonRoot.orValue(false)
+        ? variables.allContainers.all(c, c.?securityContext.?runAsNonRoot.orValue(true))
+        : variables.allContainers.all(c, c.?securityContext.?runAsNonRoot.orValue(false))
+      message: Containers must run as non-root. Set runAsNonRoot to true in the pod securityContext or on every container.

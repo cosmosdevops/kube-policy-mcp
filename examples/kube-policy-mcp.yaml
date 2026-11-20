@@ -1,0 +1,41 @@
+# Example configuration for kube-policy-mcp.
+# Relative paths are resolved from the directory of this file.
+
+# Manifests may only be read from these directories.
+workspaceRoots:
+  - ./manifests
+
+defaultPolicyPack: platform-baseline
+
+limits:
+  evaluationTimeout: 30s
+
+policyPacks:
+  - name: platform-baseline
+    description: Enterprise Kubernetes baseline (ownership, resources, pod security, registries, probes)
+    sources:
+      - engine: opa
+        path: ./policies/rego
+      - engine: kyverno
+        path: ./policies/kyverno
+    # Pack-level exemptions work for every engine. They are the exception
+    # mechanism for Rego, which has no native one.
+    exemptions:
+      - name: node-exporter-upstream-image
+        policies:
+          - opa/kubernetes.approved_registries
+        resources:
+          kinds: [DaemonSet]
+          namespaces: [monitoring]
+          names: [node-exporter]
+        reason: node-exporter is pulled from the upstream quay.io registry until it is mirrored (PLAT-1234).
+
+  - name: production
+    description: Baseline plus production-only rules that depend on namespace labels and cluster data
+    extends:
+      - platform-baseline
+    sources:
+      - engine: opa
+        path: ./policies/production/rego
+      - engine: kyverno
+        path: ./policies/production/kyverno

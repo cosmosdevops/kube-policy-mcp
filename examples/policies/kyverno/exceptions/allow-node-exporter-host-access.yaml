@@ -1,0 +1,16 @@
+# node-exporter needs the host network and host PID namespace to read node
+# metrics. This exception only covers the DaemonSet named node-exporter in the
+# monitoring namespace.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: allow-node-exporter-host-access
+  namespace: monitoring
+spec:
+  policyRefs:
+    - name: disallow-host-namespaces
+      kind: ValidatingPolicy
+  matchConditions:
+    - name: is-node-exporter
+      expression: >-
+        object.metadata.name == 'node-exporter' && object.metadata.namespace == 'monitoring'

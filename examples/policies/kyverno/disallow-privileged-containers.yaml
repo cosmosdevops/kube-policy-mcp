@@ -1,0 +1,34 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Restricted container privileges
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not run privileged and must not be able to gain more privileges than their parent process.
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Remove securityContext.privileged (or set it to false) and set securityContext.allowPrivilegeEscalation to false on every container.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: allContainers
+      expression: >-
+        object.spec.containers
+        + object.spec.?initContainers.orValue([])
+        + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        variables.allContainers.all(c, !c.?securityContext.?privileged.orValue(false))
+      message: Privileged containers are not allowed. Remove securityContext.privileged or set it to false.
+    - expression: >-
+        variables.allContainers.all(c, c.?securityContext.?allowPrivilegeEscalation.orValue(true) == false)
+      message: Every container must set securityContext.allowPrivilegeEscalation to false.

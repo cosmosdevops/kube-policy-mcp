@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kube-policy": {
+      "type": "stdio",
+      "command": "/usr/local/bin/kube-policy-mcp",
+      "args": ["serve", "--workspace-root", "/absolute/path/to/your/project"],
+      "env": {
+        "KUBE_POLICY_MCP_CONFIG": "/etc/kube-policy-mcp/kube-policy-mcp.yaml"
+      }
+    }
+  }
+}

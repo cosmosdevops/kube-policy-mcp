@@ -1,0 +1,31 @@
+# A Deployment that breaks most of the platform-baseline pack.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      hostNetwork: true
+      containers:
+        - name: web
+          image: nginx:latest
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-logs
+              mountPath: /host/var/log
+      volumes:
+        - name: host-logs
+          hostPath:
+            path: /var/log

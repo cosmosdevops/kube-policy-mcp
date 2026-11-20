@@ -1,0 +1,28 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Prohibited host networking
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Pods must not share the host network, PID or IPC namespaces.
+    kubepolicy.dev/version: 1.0.0
+    kubepolicy.dev/remediation: >-
+      Remove hostNetwork, hostPID and hostIPC from the pod spec, or set them to false.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "!object.spec.?hostNetwork.orValue(false)"
+      message: Host networking is not allowed. Remove spec.hostNetwork or set it to false.
+    - expression: "!object.spec.?hostPID.orValue(false)"
+      message: Sharing the host PID namespace is not allowed. Remove spec.hostPID or set it to false.
+    - expression: "!object.spec.?hostIPC.orValue(false)"
+      message: Sharing the host IPC namespace is not allowed. Remove spec.hostIPC or set it to false.
