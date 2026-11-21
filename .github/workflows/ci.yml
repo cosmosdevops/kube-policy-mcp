@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt on:"; echo "$unformatted"; exit 1
+          fi
+      - name: go.mod is tidy
+        run: go mod tidy -diff
+      - name: Vet
+        run: go vet ./...
+      # The end-to-end tests build the binary several times, once per
+      # single-engine variant, so this step takes a few minutes.
+      - name: Test
+        run: go test -race ./...
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/kube-policy-mcp ./cmd/kube-policy-mcp && /tmp/kube-policy-mcp version && /tmp/kube-policy-mcp engines
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags, to work out the version
+      - name: Work out the version
+        # A tag build is that version (v1.2.3 -> 1.2.3). Anything else is
+        # named after the last tag, e.g. 1.2.3-4-gabc1234.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(git describe --tags --always)
+            version=${version#v}
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building version $version"
+      - name: Build
+        run: docker build --build-arg "VERSION=$VERSION" -t "$IMAGE:build" .
+      - name: Check the image runs
+        run: |
+          reported=$(docker run --rm "$IMAGE:build" version)
+          echo "The image reports version $reported"
+          [ "$reported" = "$VERSION" ]
+          # The keys line must come out on stdout alone, never the key.
+          line=$(docker run --rm "$IMAGE:build" new-key ci 2>/dev/null)
+          echo "$line" | grep -Eq '^ci [0-9a-f]{64}$'
+          # All three engines are in the image.
+          engines=$(docker run --rm "$IMAGE:build" engines | grep -c '^[a-z]*:')
+          [ "$engines" = 3 ]
+      # Pull requests only build. Pushes to master publish :latest and the
+      # commit; version tags (v1.2.3) publish that version too.
+      - name: Publish
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tags=("sha-${GITHUB_SHA::7}")
+          if [ "$GITHUB_REF" = refs/heads/master ]; then tags+=(latest); fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then tags+=("${GITHUB_REF_NAME#v}"); fi
+          for tag in "${tags[@]}"; do
+            docker tag "$IMAGE:build" "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done

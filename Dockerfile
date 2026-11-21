@@ -29,5 +29,5 @@ USER 65532:65532
 EXPOSE 8088
 ENTRYPOINT ["/kube-policy-mcp"]
 # With no arguments it talks MCP over stdin/stdout, as "serve" does:
-#   docker run --rm -i -v /etc/kube-policy-mcp:/config:ro kube-policy-mcp
+#   docker run --rm -i -v /etc/kube-policy-mcp:/config:ro ghcr.io/cosmosdevops/kube-policy-mcp
 CMD ["serve"]

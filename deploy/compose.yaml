@@ -6,9 +6,9 @@
 # kube-policy-mcp-apache.conf.
 services:
   kube-policy-mcp:
-    # Built from a checkout of this repo. There is no published image yet.
-    build: ..
-    image: kube-policy-mcp:local
+    image: ghcr.io/cosmosdevops/kube-policy-mcp:latest
+    # Or build from a checkout of this repo instead of pulling:
+    # build: ..
     command:
       - serve
       - --http=0.0.0.0:8088

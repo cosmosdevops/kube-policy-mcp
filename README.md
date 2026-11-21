@@ -301,9 +301,12 @@ their manifests inline and cannot read files from the server.
 
 ### Or set it up with Docker
 
-The [Dockerfile](Dockerfile) builds an image that holds the one program and
-nothing else, and runs as an unprivileged user (ID 65532). There is no
-published image yet, so the compose file builds it from this checkout.
+There is an image at `ghcr.io/cosmosdevops/kube-policy-mcp`, built from every
+commit on `master`. It holds the one program and nothing else, and runs as an
+unprivileged user (ID 65532).
+
+While this repository is private, so is the image. Log in before pulling:
+`docker login ghcr.io` with a GitHub token that has the `read:packages` scope.
 
 Make the config directory, readable by that user, then start it with the
 compose file from `deploy/`:
@@ -314,7 +317,7 @@ sudo install -m 640 -o root -g 65532 deploy/kube-policy-mcp.yaml /etc/kube-polic
 sudo cp -r examples/policies /etc/kube-policy-mcp/policies            # or your own policies
 sudo chgrp -R 65532 /etc/kube-policy-mcp/policies
 sudo install -m 640 -o root -g 65532 /dev/null /etc/kube-policy-mcp/keys
-docker compose -f deploy/compose.yaml up -d --build
+docker compose -f deploy/compose.yaml up -d
 curl http://127.0.0.1:8088/healthz                  # prints ok
 ```
 
@@ -326,18 +329,18 @@ Make keys with the image too. The key is printed for you; the line for the
 file goes to standard output:
 
 ```sh
-sudo sh -c 'docker run --rm kube-policy-mcp:local new-key alice >> /etc/kube-policy-mcp/keys'
+sudo sh -c 'docker run --rm ghcr.io/cosmosdevops/kube-policy-mcp new-key alice >> /etc/kube-policy-mcp/keys'
 ```
 
-To update, rebuild and start again. Nothing is lost that matters: only the
+To update, pull and start again. Nothing is lost that matters: only the
 short history used by `explain_violation`.
 
 ```sh
-git pull && docker compose -f deploy/compose.yaml up -d --build
+docker compose -f deploy/compose.yaml pull && docker compose -f deploy/compose.yaml up -d
 ```
 
-To build the image yourself, with a version, or with fewer engines for a
-smaller image:
+To build the image yourself instead, with a version, or with fewer engines
+for a smaller image:
 
 ```sh
 docker build --build-arg VERSION=1.2.3 -t kube-policy-mcp:local .
@@ -369,7 +372,7 @@ directory that holds your config and policies at `/config`:
   "mcpServers": {
     "kube-policy": {
       "command": "docker",
-      "args": ["run", "--rm", "-i", "-v", "/etc/kube-policy-mcp:/config:ro", "kube-policy-mcp:local"]
+      "args": ["run", "--rm", "-i", "-v", "/etc/kube-policy-mcp:/config:ro", "ghcr.io/cosmosdevops/kube-policy-mcp"]
     }
   }
 }
@@ -566,6 +569,11 @@ make vet
 
 The tests in [tests](tests) build the binary and drive it over MCP stdio,
 the same way a client does.
+
+[CI](.github/workflows/ci.yml) runs on every push and pull request: gofmt,
+`go mod tidy`, vet, the tests with the race detector, and a build of the
+container image. Pushes to `master` publish the image as `:latest` and
+`:sha-<commit>`. A version tag such as `v1.2.3` also publishes `:1.2.3`.
 
 ## Licence
 
