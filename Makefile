@@ -1,6 +1,6 @@
 BINARY := bin/kube-policy-mcp
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X github.com/cosmosdevops/kube-policy-mcp/internal/app.Version=$(VERSION)
+LDFLAGS := -X github.com/cosmosdevops/kube-policy-mcp/internal/app.buildVersion=$(VERSION)
 
 .PHONY: build build-opa build-vap build-gatekeeper image licenses test vet demo
 

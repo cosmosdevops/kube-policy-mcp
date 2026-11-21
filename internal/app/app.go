@@ -16,8 +16,10 @@ import (
 	"github.com/cosmosdevops/kube-policy-mcp/internal/policy"
 )
 
-// Version is the application version, set at build time with -ldflags.
-var Version = "0.1.0-dev"
+// Version is what the version command prints and what the server reports
+// to clients. Nothing in the code states it: it comes from the git tag being
+// built. See version.go.
+var Version = resolveVersion(buildVersion, moduleVersion())
 
 // ConfigEnv names the environment variable that points at the config file.
 const ConfigEnv = "KUBE_POLICY_MCP_CONFIG"

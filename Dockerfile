@@ -14,7 +14,7 @@ ARG VERSION=dev
 #   docker build --build-arg TAGS="no_vap no_gatekeeper" .
 ARG TAGS=""
 RUN CGO_ENABLED=0 go build -trimpath -tags "${TAGS}" \
-    -ldflags="-s -w -X github.com/cosmosdevops/kube-policy-mcp/internal/app.Version=${VERSION}" \
+    -ldflags="-s -w -X github.com/cosmosdevops/kube-policy-mcp/internal/app.buildVersion=${VERSION}" \
     -o /kube-policy-mcp ./cmd/kube-policy-mcp
 # Open source licences ask that their text travels with the binary. Collect
 # the licence and notice files of exactly the modules that were linked in.
