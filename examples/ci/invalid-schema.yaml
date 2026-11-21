@@ -1,0 +1,23 @@
+# Not a valid Deployment: replicas is text, and "contaners" is misspelt.
+# A schema validator catches this. Policies are not the tool for it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: payments
+  labels:
+    owner: jane.doe
+    team: payments
+spec:
+  replicas: "three"
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+    spec:
+      contaners:
+        - name: web
+          image: registry.example.com/payments/web:1.4.2

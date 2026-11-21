@@ -1,0 +1,96 @@
+name: Check manifests
+
+# Checks Kubernetes manifests with two MCP servers, the way a repository of
+# manifests would on every pull request:
+#
+#   1. ojs-mcp          are they valid against the schemas?
+#   2. kube-policy-mcp  do they comply with the policies?
+#
+# This file is an example. It is kept outside .github/workflows, so GitHub
+# does not run it. To turn it on, copy it to .github/workflows/.
+#
+# As written it runs on this repository's examples. It also checks the
+# opposite: that a schema error, a policy violation and missing context are
+# caught. "make check-manifests" runs the same steps on your machine.
+#
+# To use it in your own repository, copy this file and examples/ci/, keep the
+# first check step, and point it at your manifests and your config.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - examples/**
+      - .github/workflows/check-manifests.yml
+  pull_request:
+    paths:
+      - examples/**
+      - .github/workflows/check-manifests.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-manifests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHECK: python3 examples/ci/check_manifests.py --config examples/kube-policy-mcp.yaml
+
+jobs:
+  check:
+    name: Schema and policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install the MCP servers
+        # This repository builds kube-policy-mcp from its own source. In
+        # another repository, install a release instead:
+        #   go install github.com/cosmosdevops/kube-policy-mcp/cmd/kube-policy-mcp@v0.1.0
+        run: |
+          go install github.com/cosmosdevops/ojs-mcp@v0.2.1
+          go install ./cmd/kube-policy-mcp
+          ojs-mcp -version
+          kube-policy-mcp version
+
+      - name: Manifests pass both checks
+        run: $CHECK examples/manifests/compliant
+
+      - name: A manifest that needs context passes when it is given
+        run: >
+          $CHECK --policy-pack production
+          --context-file examples/ci/production-context.json
+          examples/manifests/production/checkout.yaml
+
+      # The steps below expect the check to fail. They hide the annotations
+      # of the expected problems, so a green run stays clean.
+      - name: A schema error is caught
+        run: |
+          if out=$($CHECK examples/ci/invalid-schema.yaml 2>&1); then
+            echo "::error::a manifest with schema errors passed"; echo "$out"; exit 1
+          fi
+          echo "$out" | sed 's/^::/  /'
+          echo "$out" | grep -q 'title=Schema'
+          echo "$out" | grep -q 'policy: skipped'
+
+      - name: A policy violation is caught
+        run: |
+          if out=$($CHECK examples/manifests/noncompliant 2>&1); then
+            echo "::error::a manifest that breaks policies passed"; echo "$out"; exit 1
+          fi
+          echo "$out" | sed 's/^::/  /'
+          echo "$out" | grep -q 'schema: valid'
+          echo "$out" | grep -q 'policy: not compliant'
+
+      - name: Missing context is not a pass
+        run: |
+          if out=$($CHECK --policy-pack production examples/manifests/production/checkout.yaml 2>&1); then
+            echo "::error::a manifest passed although some checks could not be decided"; echo "$out"; exit 1
+          fi
+          echo "$out" | sed 's/^::/  /'
+          echo "$out" | grep -q 'undecided'

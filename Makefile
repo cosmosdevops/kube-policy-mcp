@@ -2,7 +2,7 @@ BINARY := bin/kube-policy-mcp
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/cosmosdevops/kube-policy-mcp/internal/app.buildVersion=$(VERSION)
 
-.PHONY: build build-opa build-vap build-gatekeeper image licenses test vet demo
+.PHONY: build build-opa build-vap build-gatekeeper image licenses test vet demo check-manifests
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/kube-policy-mcp
@@ -37,3 +37,11 @@ vet:
 # Runs the scripted agent workflow against the real MCP server.
 demo: build
 	go run ./examples/mcp/workflow
+
+# Runs the example CI workflow on this machine: each example manifest is
+# checked against the schemas with ojs-mcp, then against the policies. See
+# examples/ci. Needs Python 3 and network access for the schemas.
+OJS_MCP_VERSION ?= v0.2.1
+check-manifests: build
+	GOBIN=$(abspath bin) go install github.com/cosmosdevops/ojs-mcp@$(OJS_MCP_VERSION)
+	PATH="$(abspath bin):$$PATH" examples/ci/local-run.sh

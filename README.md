@@ -196,6 +196,11 @@ kube-policy-mcp engines
 nothing failed but some checks are `unknown` or `error`, and `3` on a usage
 or runtime error.
 
+[examples/ci](examples/ci) has an example GitHub Actions workflow that checks
+manifests on every pull request, first against the schemas with
+[ojs-mcp](https://github.com/cosmosdevops/ojs-mcp) and then against the
+policies. `make check-manifests` runs it on your machine.
+
 ## Hosting
 
 `serve --http` runs one server for many agents. Each caller needs an API

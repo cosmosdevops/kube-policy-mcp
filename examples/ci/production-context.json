@@ -1,0 +1,24 @@
+{
+  "namespace": {
+    "name": "checkout",
+    "labels": {
+      "environment": "production",
+      "team": "checkout"
+    }
+  },
+  "operation": "CREATE",
+  "resources": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "registered-teams",
+        "namespace": "platform-system"
+      },
+      "data": {
+        "checkout": "true",
+        "payments": "true"
+      }
+    }
+  ]
+}
