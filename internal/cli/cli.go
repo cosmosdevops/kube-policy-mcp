@@ -224,6 +224,8 @@ func evaluateCmd(g *globals, stdin io.Reader) *cobra.Command {
 		dir         string
 		pack        string
 		policies    []string
+		engineNames []string
+		severities  []string
 		contextFile string
 		namespace   string
 		operation   string
@@ -314,7 +316,7 @@ not be decided), 3 usage or runtime error.`,
 				skipped = sk
 			}
 			res, err := a.Evaluator.Evaluate(cmd.Context(), evaluator.Request{
-				Resources: resources, Pack: pack, PolicyIDs: policies, Context: ec, IncludeAll: all, SkippedFiles: skipped,
+				Resources: resources, Pack: pack, Select: evaluator.Selection{IDs: policies, Engines: engineNames, Severities: severities}, Context: ec, IncludeAll: all, SkippedFiles: skipped,
 			})
 			if err != nil {
 				return err
@@ -355,7 +357,9 @@ not be decided), 3 usage or runtime error.`,
 	f.StringArrayVarP(&files, "file", "f", nil, "manifest file to evaluate; use - for stdin (repeatable)")
 	f.StringVar(&dir, "dir", "", "evaluate every manifest under this directory")
 	f.StringVar(&pack, "policy-pack", "", "policy pack to use (default: the configured default pack)")
-	f.StringArrayVar(&policies, "policy", nil, "only evaluate this policy id (repeatable)")
+	f.StringArrayVar(&policies, "policy", nil, "only evaluate this policy id; * is a wildcard, as in 'vap/*' (repeatable)")
+	f.StringArrayVar(&engineNames, "engine", nil, "only evaluate policies of this engine (repeatable)")
+	f.StringArrayVar(&severities, "severity", nil, "only evaluate policies with this severity (repeatable)")
 	f.StringVar(&contextFile, "context-file", "", "YAML or JSON file with the simulated evaluation context")
 	f.StringVar(&namespace, "namespace", "", "target namespace for resources that do not set one")
 	f.StringVar(&operation, "operation", "", "admission operation: CREATE, UPDATE or DELETE")

@@ -162,7 +162,7 @@ func TestRequestErrors(t *testing.T) {
 	if _, err := ev.Evaluate(context.Background(), Request{Pack: "p"}); err == nil {
 		t.Error("no resources must be an error")
 	}
-	if _, err := ev.Evaluate(context.Background(), Request{Resources: resources(t, twoPods), Pack: "p", PolicyIDs: []string{"fake/typo"}}); err == nil {
+	if _, err := ev.Evaluate(context.Background(), Request{Resources: resources(t, twoPods), Pack: "p", Select: Selection{IDs: []string{"fake/typo"}}}); err == nil {
 		t.Error("unknown policy id must be an error")
 	}
 	if _, err := ev.Evaluate(context.Background(), Request{Resources: resources(t, twoPods), Pack: "p", Context: evalctx.Context{Operation: "PATCH"}}); err == nil {
@@ -305,5 +305,96 @@ func TestSecretValuesAreRedacted(t *testing.T) {
 	dump := f.Message + f.Remediation.Description + ex.Summary + ex.Actual.Value + f.Details["value"].(string) + f.Details["list"].([]any)[0].(string)
 	if strings.Contains(dump, "hunter2") {
 		t.Errorf("secret leaked: %s", dump)
+	}
+}
+
+func TestSelectPolicies(t *testing.T) {
+	sev := func(s string) func(*policy.Policy) { return func(p *policy.Policy) { p.Severity = s } }
+	other := func(p *policy.Policy) { p.Engine, p.ID = "other", "other/"+p.Name }
+	all := []policy.Policy{
+		pol("host-network", sev("high")),
+		pol("host-path", sev("high")),
+		pol("labels", sev("low")),
+		pol("probes"), // no severity declared
+		pol("limits", sev("medium"), other),
+		pol("tags", sev("HIGH"), other),
+	}
+	ids := func(ps []policy.Policy) string {
+		var out []string
+		for _, p := range ps {
+			out = append(out, p.ID)
+		}
+		return strings.Join(out, " ")
+	}
+	for name, c := range map[string]struct {
+		sel  Selection
+		want string
+	}{
+		"nothing selected is the whole pack": {Selection{}, "fake/host-network fake/host-path fake/labels fake/probes other/limits other/tags"},
+		"exact id":                           {Selection{IDs: []string{"fake/labels"}}, "fake/labels"},
+		"bare name":                          {Selection{IDs: []string{"limits"}}, "other/limits"},
+		"wildcard on the engine prefix":      {Selection{IDs: []string{"other/*"}}, "other/limits other/tags"},
+		"wildcard in the middle":             {Selection{IDs: []string{"*host*"}}, "fake/host-network fake/host-path"},
+		"ids and patterns add up":            {Selection{IDs: []string{"fake/host-*", "fake/labels", "fake/host-path"}}, "fake/host-network fake/host-path fake/labels"},
+		"one engine":                         {Selection{Engines: []string{"other"}}, "other/limits other/tags"},
+		"engine names ignore case":           {Selection{Engines: []string{"FAKE", "other"}}, "fake/host-network fake/host-path fake/labels fake/probes other/limits other/tags"},
+		"one severity, any case":             {Selection{Severities: []string{"high"}}, "fake/host-network fake/host-path other/tags"},
+		"several severities":                 {Selection{Severities: []string{"low", "medium"}}, "fake/labels other/limits"},
+		"engine and severity must both hold": {Selection{Engines: []string{"fake"}, Severities: []string{"high"}}, "fake/host-network fake/host-path"},
+		"all three parts":                    {Selection{IDs: []string{"*host*", "other/*"}, Engines: []string{"other"}, Severities: []string{"high"}}, "other/tags"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := selectPolicies(all, c.sel)
+			if err != nil || ids(got) != c.want {
+				t.Errorf("got %q, %v\nwant %q", ids(got), err, c.want)
+			}
+		})
+	}
+	// Anything that matches nothing is an error, never a smaller evaluation.
+	for name, c := range map[string]struct {
+		sel  Selection
+		want string
+	}{
+		"unknown id":              {Selection{IDs: []string{"fake/nope"}}, `policy "fake/nope" is not in the pack`},
+		"pattern with no match":   {Selection{IDs: []string{"kyverno/*"}}, `pattern "kyverno/*" matches no policy`},
+		"one bad id among good":   {Selection{IDs: []string{"fake/labels", "fake/nope"}}, `"fake/nope"`},
+		"unknown engine":          {Selection{Engines: []string{"kyverno"}}, `no policy in the pack uses engine "kyverno" (engines in the pack: fake, other)`},
+		"unknown severity":        {Selection{Severities: []string{"critical"}}, `no policy in the pack has severity "critical"`},
+		"parts that do not meet":  {Selection{IDs: []string{"fake/labels"}, Severities: []string{"high"}}, "no policy satisfies all of them"},
+		"engine without severity": {Selection{Engines: []string{"other"}, Severities: []string{"low"}}, "no policy satisfies all of them"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := selectPolicies(all, c.sel)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("got %q, %v\nwant an error containing %q", ids(got), err, c.want)
+			}
+		})
+	}
+	ambiguous := append([]policy.Policy{pol("labels", other)}, all...)
+	if _, err := selectPolicies(ambiguous, Selection{IDs: []string{"labels"}}); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("a name used by two engines: %v", err)
+	}
+}
+
+// A narrowed evaluation says so, because its verdict does not cover the pack.
+func TestPartialEvaluationIsNoted(t *testing.T) {
+	eng := &scripted{policies: []policy.Policy{pol("a"), pol("b"), pol("c")}, eval: all(findings.StatusPass)}
+	e := setup(t, eng)
+	res, err := e.Evaluate(context.Background(), Request{Resources: resources(t, twoPods), Select: Selection{IDs: []string{"fake/a*"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Report.Summary.PoliciesEvaluated != 1 || !strings.Contains(strings.Join(res.Report.Notes, "\n"), "Only 1 of the 3 policies") {
+		t.Errorf("summary = %+v notes = %v", res.Report.Summary, res.Report.Notes)
+	}
+	res, err = e.Evaluate(context.Background(), Request{Resources: resources(t, twoPods)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(res.Report.Notes, "\n"), "Only ") {
+		t.Errorf("a full evaluation was noted as partial: %v", res.Report.Notes)
+	}
+	if _, err := e.Evaluate(context.Background(), Request{Resources: resources(t, twoPods), Select: Selection{Engines: []string{"nope"}}}); err == nil {
+		t.Error("an unknown engine was accepted")
 	}
 }

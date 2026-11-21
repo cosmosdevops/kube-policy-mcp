@@ -79,7 +79,7 @@ To use a hosted server instead, see [Host it](#host-it).
 | `list_policy_packs` | Lists the configured packs, the default pack, and the engines in this server. Pass `includeLimitations: true` to also get each engine's offline limitations. |
 | `list_policies` | Lists the policies of a pack. Filter by engine, kind, severity or namespace. |
 | `get_policy` | Shows one policy: purpose, rules, matching, enforcement, exceptions, required context, remediation. Can include the source. |
-| `evaluate_manifests` | Evaluates inline YAML/JSON or workspace files against a pack. |
+| `evaluate_manifests` | Evaluates inline YAML/JSON or workspace files against a pack, or against a selection of its policies. |
 | `evaluate_directory` | Evaluates every manifest under a workspace directory, grouped by file and resource. |
 | `explain_violation` | Explains a finding from an earlier evaluation: rule, expected behaviour, observed value, fix. |
 
@@ -132,6 +132,39 @@ The verdict and the completeness are reported separately:
 By default `findings` lists only what needs attention. Pass
 `options.includeAllResults: true` to also see `pass` and `not_applicable`.
 `policyResults` always gives the per-policy counts.
+
+### Checking against some policies only
+
+By default a manifest is checked against the whole pack. Both evaluation
+tools can narrow that with three optional inputs:
+
+| Input | Selects | Example |
+| --- | --- | --- |
+| `policies` | Policy ids. `*` is a wildcard. | `["vap/disallow-host-namespaces"]`, `["gatekeeper/*"]`, `["*host*"]` |
+| `engines` | Every policy of these engines. | `["opa"]` |
+| `severities` | Every policy with one of these severities. | `["high", "critical"]` |
+
+```json
+{
+  "name": "evaluate_manifests",
+  "arguments": {
+    "manifests": "...",
+    "engines": ["opa", "vap"],
+    "severities": ["high"]
+  }
+}
+```
+
+- Within one input, the entries add up: `["high", "critical"]` means either.
+- Across inputs, all must hold: the call above checks policies that are
+  from `opa` or `vap` **and** have severity `high`.
+- Anything that matches nothing is an error: an unknown id, a pattern with
+  no match, an engine or severity no policy has, or inputs with no policy in
+  common. A typing mistake never quietly shrinks the evaluation.
+- A narrowed result carries a note such as "Only 4 of the 11 policies in the
+  pack were evaluated". `compliant` then covers those policies only.
+- Severity is whatever each policy declares. A policy that declares none is
+  not selected by `severities`.
 
 ## Configuration
 
@@ -459,6 +492,8 @@ debugging and CI.
 ```bash
 kube-policy-mcp evaluate --file deployment.yaml --policy-pack platform-baseline
 kube-policy-mcp evaluate --dir ./k8s --output json
+kube-policy-mcp evaluate --file app.yaml --policy 'vap/*' --policy opa/kubernetes.health_probes
+kube-policy-mcp evaluate --file app.yaml --engine opa --severity high
 kube-policy-mcp evaluate --file app.yaml --policy-pack production --context-file context.yaml --explain
 cat app.yaml | kube-policy-mcp evaluate --file - --namespace payments
 kube-policy-mcp serve --http 127.0.0.1:8088 --keys ./keys

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -85,11 +86,12 @@ type finding struct {
 }
 
 type report struct {
-	EvaluationID string `json:"evaluationId"`
-	Status       string `json:"status"`
-	Complete     bool   `json:"complete"`
-	Compliant    bool   `json:"compliant"`
-	PolicyPack   string `json:"policyPack"`
+	EvaluationID string   `json:"evaluationId"`
+	Status       string   `json:"status"`
+	Complete     bool     `json:"complete"`
+	Compliant    bool     `json:"compliant"`
+	PolicyPack   string   `json:"policyPack"`
+	Notes        []string `json:"notes"`
 	Summary      struct {
 		ResourcesEvaluated, PoliciesEvaluated, Violations, Warnings, Unknown, Errors, Exempted, Passed, NotApplicable int
 	} `json:"summary"`
@@ -762,5 +764,74 @@ func TestEnginesCanBeTurnedOffInConfig(t *testing.T) {
 	}
 	if strings.Join(packs.Engines, ",") != "gatekeeper,opa" || len(state) != 3 || state["vap"] || !state["opa"] || !state["gatekeeper"] {
 		t.Errorf("engines = %v details = %v", packs.Engines, state)
+	}
+}
+
+// TestSelectingPolicies covers narrowing an evaluation by id pattern, engine
+// and severity, over MCP and on the command line.
+func TestSelectingPolicies(t *testing.T) {
+	s := connect(t)
+	bad := read(t, example("manifests", "noncompliant", "web.yaml"))
+	eval := func(args map[string]any) (report, bool) {
+		args["manifests"] = bad
+		var r report
+		isErr, _ := call(t, s, "evaluate_manifests", args, &r)
+		return r, isErr
+	}
+	engines := func(r report) string {
+		seen := map[string]bool{}
+		for _, f := range r.Findings {
+			seen[f.Engine] = true
+		}
+		var out []string
+		for e := range seen {
+			out = append(out, e)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+
+	if r, _ := eval(map[string]any{"engines": []string{"vap"}}); r.Summary.PoliciesEvaluated != 3 || engines(r) != "vap" || r.Status != "fail" {
+		t.Errorf("engine vap: %d policies, engines %q, status %s", r.Summary.PoliciesEvaluated, engines(r), r.Status)
+	}
+	if r, _ := eval(map[string]any{"policies": []string{"gatekeeper/*"}}); r.Summary.PoliciesEvaluated != 2 || engines(r) != "gatekeeper" {
+		t.Errorf("gatekeeper/*: %d policies, engines %q", r.Summary.PoliciesEvaluated, engines(r))
+	}
+	if r, _ := eval(map[string]any{"policies": []string{"*host*"}}); r.Summary.PoliciesEvaluated != 2 || engines(r) != "gatekeeper,vap" {
+		t.Errorf("*host*: %d policies, engines %q", r.Summary.PoliciesEvaluated, engines(r))
+	}
+	// Engine and severity must both hold. The one low-severity policy only warns.
+	r, _ := eval(map[string]any{"engines": []string{"opa"}, "severities": []string{"low"}})
+	if r.Summary.PoliciesEvaluated != 1 || r.Status != "warning" || r.Summary.Violations != 0 {
+		t.Errorf("opa and low: %+v status %s", r.Summary, r.Status)
+	}
+	// A narrowed run says that its verdict does not cover the whole pack.
+	if !strings.Contains(strings.Join(r.Notes, "\n"), "Only 1 of the 11 policies") {
+		t.Errorf("notes = %v", r.Notes)
+	}
+	// Nothing may shrink an evaluation by mistake.
+	for name, args := range map[string]map[string]any{
+		"unknown engine":   {"engines": []string{"kyverno"}},
+		"unknown severity": {"severities": []string{"critical"}},
+		"empty pattern":    {"policies": []string{"kyverno/*"}},
+		"no overlap":       {"engines": []string{"gatekeeper"}, "severities": []string{"low"}},
+	} {
+		if _, isErr := eval(args); !isErr {
+			t.Errorf("%s must be a tool error", name)
+		}
+	}
+
+	file := example("manifests", "noncompliant", "web.yaml")
+	code, out := run(t, binary, example("kube-policy-mcp.yaml"), "evaluate", "-f", file, "--policy", "opa/*", "--severity", "high")
+	if code != 1 || !strings.Contains(out, "against 4 policy(ies)") || strings.Contains(out, " vap/") || !strings.Contains(out, "Only 4 of the 11 policies") {
+		t.Errorf("opa/* and high: exit %d\n%s", code, out)
+	}
+	code, out = run(t, binary, example("kube-policy-mcp.yaml"), "evaluate", "-f", file, "--engine", "vap", "--engine", "gatekeeper")
+	if code != 1 || !strings.Contains(out, "against 5 policy(ies)") || strings.Contains(out, " opa/") {
+		t.Errorf("two engines: exit %d\n%s", code, out)
+	}
+	code, out = run(t, binary, example("kube-policy-mcp.yaml"), "evaluate", "-f", file, "--engine", "kyverno")
+	if code != 3 || !strings.Contains(out, `no policy in the pack uses engine "kyverno"`) {
+		t.Errorf("unknown engine: exit %d\n%s", code, out)
 	}
 }

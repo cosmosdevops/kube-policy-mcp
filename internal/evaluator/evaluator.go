@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,9 +36,9 @@ type Evaluator struct {
 type Request struct {
 	Resources []manifests.Resource
 	Pack      string
-	// PolicyIDs optionally restricts evaluation to some policies of the pack.
-	PolicyIDs []string
-	Context   evalctx.Context
+	// Select optionally restricts evaluation to some policies of the pack.
+	Select  Selection
+	Context evalctx.Context
 	// IncludeAll also lists pass and not_applicable results in the report.
 	IncludeAll   bool
 	SkippedFiles []findings.SkippedFile
@@ -74,7 +75,10 @@ func (e *Evaluator) Evaluate(ctx context.Context, req Request) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	policies, err := selectPolicies(pack.Policies, req.PolicyIDs)
+	if len(pack.Policies) == 0 {
+		return nil, fmt.Errorf("policy pack %q contains no policies, so nothing can be concluded", packName)
+	}
+	policies, err := selectPolicies(pack.Policies, req.Select)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +87,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, req Request) (*Result, error) 
 	}
 
 	notes := append([]string(nil), pack.Notes...)
+	// A partial evaluation must say so: its verdict only covers what was
+	// selected, not the whole pack.
+	if !req.Select.empty() && len(policies) < len(pack.Policies) {
+		notes = append(notes, fmt.Sprintf("Only %d of the %d policies in the pack were evaluated (selected by %s). The verdict covers those policies only, not the whole pack.", len(policies), len(pack.Policies), req.Select.describe()))
+	}
 	notes = append(notes, "Context values (namespace, user, operation, variables) are simulated by the caller and are not verified against a cluster.")
 
 	// Resources without a namespace are treated as deployed to the target namespace.
@@ -409,33 +418,126 @@ func matchAny(patterns []string, s string) bool {
 	return false
 }
 
-// selectPolicies filters by ID. A bare policy name is accepted when unique.
-func selectPolicies(all []policy.Policy, ids []string) ([]policy.Policy, error) {
-	if len(ids) == 0 {
+// Selection narrows an evaluation to some policies of a pack. The three
+// parts are combined: a policy must satisfy every part that is set. An empty
+// Selection means the whole pack.
+type Selection struct {
+	// IDs holds policy ids. An entry may use * as a wildcard, for example
+	// "vap/*" or "*host*". A bare policy name is accepted when it is unique.
+	IDs []string
+	// Engines keeps policies of these engines.
+	Engines []string
+	// Severities keeps policies with one of these severities.
+	Severities []string
+}
+
+func (s Selection) empty() bool {
+	return len(s.IDs) == 0 && len(s.Engines) == 0 && len(s.Severities) == 0
+}
+
+// describe renders the selection for a report note.
+func (s Selection) describe() string {
+	var parts []string
+	if len(s.IDs) > 0 {
+		parts = append(parts, "policies "+strings.Join(s.IDs, ", "))
+	}
+	if len(s.Engines) > 0 {
+		parts = append(parts, "engines "+strings.Join(s.Engines, ", "))
+	}
+	if len(s.Severities) > 0 {
+		parts = append(parts, "severities "+strings.Join(s.Severities, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// selectPolicies applies a selection to the policies of a pack.
+//
+// Every entry of the selection must match something. An id, pattern, engine
+// or severity that matches nothing is an error, as is a selection whose parts
+// have no policy in common. Otherwise a typing mistake would quietly shrink
+// the evaluation and make a manifest look more compliant than it is.
+func selectPolicies(all []policy.Policy, sel Selection) ([]policy.Policy, error) {
+	if sel.empty() {
 		return all, nil
 	}
-	var out []policy.Policy
-	picked := map[string]bool{}
-	for _, want := range ids {
-		var hits []policy.Policy
-		for _, p := range all {
-			if p.ID == want || p.Name == want {
-				hits = append(hits, p)
+	keep := func(p policy.Policy) bool { return true }
+
+	if len(sel.Engines) > 0 {
+		for _, want := range sel.Engines {
+			if !slices.ContainsFunc(all, func(p policy.Policy) bool { return strings.EqualFold(p.Engine, want) }) {
+				return nil, fmt.Errorf("no policy in the pack uses engine %q (engines in the pack: %s)", want, strings.Join(distinct(all, func(p policy.Policy) string { return p.Engine }), ", "))
 			}
 		}
-		switch {
-		case len(hits) == 0:
-			return nil, fmt.Errorf("policy %q is not in the pack; use list_policies to see valid ids", want)
-		case len(hits) > 1:
-			return nil, fmt.Errorf("policy name %q is ambiguous; use the full id", want)
+		prev := keep
+		keep = func(p policy.Policy) bool {
+			return prev(p) && slices.ContainsFunc(sel.Engines, func(e string) bool { return strings.EqualFold(p.Engine, e) })
 		}
-		if !picked[hits[0].ID] {
-			picked[hits[0].ID] = true
-			out = append(out, hits[0])
+	}
+	if len(sel.Severities) > 0 {
+		for _, want := range sel.Severities {
+			if !slices.ContainsFunc(all, func(p policy.Policy) bool { return strings.EqualFold(p.Severity, want) }) {
+				return nil, fmt.Errorf("no policy in the pack has severity %q (severities in the pack: %s)", want, strings.Join(distinct(all, func(p policy.Policy) string { return p.Severity }), ", "))
+			}
 		}
+		prev := keep
+		keep = func(p policy.Policy) bool {
+			return prev(p) && slices.ContainsFunc(sel.Severities, func(s string) bool { return strings.EqualFold(p.Severity, s) })
+		}
+	}
+	if len(sel.IDs) > 0 {
+		picked := map[string]bool{}
+		for _, want := range sel.IDs {
+			var hits []policy.Policy
+			wildcard := strings.Contains(want, "*")
+			for _, p := range all {
+				if p.ID == want || p.Name == want || (wildcard && matchAny([]string{want}, p.ID)) {
+					hits = append(hits, p)
+				}
+			}
+			switch {
+			case len(hits) == 0 && wildcard:
+				return nil, fmt.Errorf("pattern %q matches no policy in the pack; use list_policies to see valid ids", want)
+			case len(hits) == 0:
+				return nil, fmt.Errorf("policy %q is not in the pack; use list_policies to see valid ids", want)
+			case len(hits) > 1 && !wildcard:
+				return nil, fmt.Errorf("policy name %q is ambiguous; use the full id", want)
+			}
+			for _, h := range hits {
+				picked[h.ID] = true
+			}
+		}
+		prev := keep
+		keep = func(p policy.Policy) bool { return prev(p) && picked[p.ID] }
+	}
+
+	var out []policy.Policy
+	for _, p := range all {
+		if keep(p) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("the selection matches no policy: each part matches something, but no policy satisfies all of them (%s)", sel.describe())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// distinct lists the different non-empty values of a policy field, sorted.
+func distinct(all []policy.Policy, field func(policy.Policy) string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range all {
+		if v := field(p); v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return []string{"none"}
+	}
+	return out
 }
 
 func contextResources(ec evalctx.Context) []manifests.Resource {

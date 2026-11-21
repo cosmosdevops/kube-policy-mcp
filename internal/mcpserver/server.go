@@ -106,7 +106,7 @@ func New(a *app.App) (*Server, *mcp.Server) {
 	}, s.getPolicy)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "evaluate_manifests",
-		Description: "Evaluate Kubernetes manifests against a policy pack, offline. Pass inline YAML or JSON (multiple documents allowed) in 'manifests', or workspace file paths in 'files'. Returns the verdict, violations, warnings, checks that could not be decided, and remediation for each finding. Nothing is applied to a cluster and the manifests are not changed.",
+		Description: "Evaluate Kubernetes manifests against a policy pack, offline. Pass inline YAML or JSON (multiple documents allowed) in 'manifests', or workspace file paths in 'files'. The whole pack is used unless you narrow it with 'policies' (ids, * wildcards allowed), 'engines' or 'severities'. Returns the verdict, violations, warnings, checks that could not be decided, and remediation for each finding. Nothing is applied to a cluster and the manifests are not changed.",
 		Annotations: readOnly,
 	}, s.evaluateManifests)
 	mcp.AddTool(srv, &mcp.Tool{
@@ -250,7 +250,9 @@ type evaluateManifestsInput struct {
 	Manifests  string           `json:"manifests,omitempty" jsonschema:"inline Kubernetes YAML or JSON; several documents may be separated by ---"`
 	Files      []string         `json:"files,omitempty" jsonschema:"manifest file paths inside the workspace, relative to the workspace root"`
 	PolicyPack string           `json:"policyPack,omitempty" jsonschema:"policy pack name; the default pack is used when omitted"`
-	Policies   []string         `json:"policies,omitempty" jsonschema:"only evaluate these policy ids"`
+	Policies   []string         `json:"policies,omitempty" jsonschema:"only evaluate these policy ids. An entry may use * as a wildcard, for example vap/* or *host*"`
+	Engines    []string         `json:"engines,omitempty" jsonschema:"only evaluate policies of these engines, for example opa"`
+	Severities []string         `json:"severities,omitempty" jsonschema:"only evaluate policies with one of these severities, for example high"`
 	Context    *evalctx.Context `json:"context,omitempty" jsonschema:"simulated evaluation context: target namespace and its labels, operation, user, variables and extra resources"`
 	Options    *evalOptions     `json:"options,omitempty"`
 }
@@ -278,7 +280,7 @@ func (s *Server) evaluateManifests(ctx context.Context, req *mcp.CallToolRequest
 	if lim.MaxResources > 0 && len(resources) > lim.MaxResources {
 		return nil, nil, fmt.Errorf("more than %d resources in one request", lim.MaxResources)
 	}
-	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, in.Policies, in.Context, in.Options, nil)
+	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, evaluator.Selection{IDs: in.Policies, Engines: in.Engines, Severities: in.Severities}, in.Context, in.Options, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -288,7 +290,9 @@ func (s *Server) evaluateManifests(ctx context.Context, req *mcp.CallToolRequest
 type evaluateDirectoryInput struct {
 	Directory  string           `json:"directory" jsonschema:"directory inside the workspace, relative to the workspace root; use . for the root"`
 	PolicyPack string           `json:"policyPack,omitempty" jsonschema:"policy pack name; the default pack is used when omitted"`
-	Policies   []string         `json:"policies,omitempty" jsonschema:"only evaluate these policy ids"`
+	Policies   []string         `json:"policies,omitempty" jsonschema:"only evaluate these policy ids. An entry may use * as a wildcard, for example vap/* or *host*"`
+	Engines    []string         `json:"engines,omitempty" jsonschema:"only evaluate policies of these engines, for example opa"`
+	Severities []string         `json:"severities,omitempty" jsonschema:"only evaluate policies with one of these severities, for example high"`
 	Context    *evalctx.Context `json:"context,omitempty" jsonschema:"simulated evaluation context"`
 	Options    *evalOptions     `json:"options,omitempty"`
 }
@@ -319,7 +323,7 @@ func (s *Server) evaluateDirectory(ctx context.Context, req *mcp.CallToolRequest
 	if len(resources) == 0 {
 		return nil, nil, fmt.Errorf("no Kubernetes manifests found under %s (%d file(s) skipped)", in.Directory, len(skipped))
 	}
-	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, in.Policies, in.Context, in.Options, skipped)
+	res, err := s.evaluate(ctx, caller(req), resources, in.PolicyPack, evaluator.Selection{IDs: in.Policies, Engines: in.Engines, Severities: in.Severities}, in.Context, in.Options, skipped)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -341,8 +345,8 @@ func Directory(res *evaluator.Result, dir string) *DirectoryReport {
 	}
 }
 
-func (s *Server) evaluate(ctx context.Context, who string, resources []manifests.Resource, pack string, policies []string, ec *evalctx.Context, opts *evalOptions, skipped []findings.SkippedFile) (*evaluator.Result, error) {
-	req := evaluator.Request{Resources: resources, Pack: pack, PolicyIDs: policies, SkippedFiles: skipped}
+func (s *Server) evaluate(ctx context.Context, who string, resources []manifests.Resource, pack string, sel evaluator.Selection, ec *evalctx.Context, opts *evalOptions, skipped []findings.SkippedFile) (*evaluator.Result, error) {
+	req := evaluator.Request{Resources: resources, Pack: pack, Select: sel, SkippedFiles: skipped}
 	if ec != nil {
 		req.Context = *ec
 	}
