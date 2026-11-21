@@ -263,6 +263,118 @@ applies. Change this with `--rate` and `--burst`. One key's use doesn't
 affect another's. Requests without a valid key get `401`, and requests over
 the limit get `429` with a `Retry-After` header.
 
+### Set it up
+
+The files in [deploy](deploy) set it up as a systemd service behind Apache.
+Everything the server needs lives in one directory:
+
+```text
+/etc/kube-policy-mcp/kube-policy-mcp.yaml   the config (start from deploy/kube-policy-mcp.yaml)
+/etc/kube-policy-mcp/policies/              your policy sources
+/etc/kube-policy-mcp/keys                   the API keys
+```
+
+```sh
+CGO_ENABLED=0 go build -trimpath -o kube-policy-mcp ./cmd/kube-policy-mcp   # on any machine
+sudo install -m 755 kube-policy-mcp /usr/local/bin/
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin kube-policy-mcp
+sudo install -d -m 750 -o root -g kube-policy-mcp /etc/kube-policy-mcp
+sudo install -m 640 -o root -g kube-policy-mcp deploy/kube-policy-mcp.yaml /etc/kube-policy-mcp/
+sudo cp -r examples/policies /etc/kube-policy-mcp/policies            # or your own policies
+sudo chgrp -R kube-policy-mcp /etc/kube-policy-mcp/policies
+sudo install -m 640 -o root -g kube-policy-mcp /dev/null /etc/kube-policy-mcp/keys
+sudo install -m 644 deploy/kube-policy-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now kube-policy-mcp
+curl http://127.0.0.1:8088/healthz                  # prints ok
+```
+
+Then route `/mcp` to it from Apache. Copy `deploy/kube-policy-mcp-apache.conf`
+to `/etc/apache2/` and include it in the site's HTTPS `<VirtualHost>`:
+
+```sh
+sudo a2enmod proxy proxy_http
+sudo apachectl configtest && sudo systemctl reload apache2
+```
+
+The hosted config in `deploy/` has no `workspaceRoots`, so callers send
+their manifests inline and cannot read files from the server.
+
+### Or set it up with Docker
+
+The [Dockerfile](Dockerfile) builds an image that holds the one program and
+nothing else, and runs as an unprivileged user (ID 65532). There is no
+published image yet, so the compose file builds it from this checkout.
+
+Make the config directory, readable by that user, then start it with the
+compose file from `deploy/`:
+
+```sh
+sudo install -d -m 750 -o root -g 65532 /etc/kube-policy-mcp
+sudo install -m 640 -o root -g 65532 deploy/kube-policy-mcp.yaml /etc/kube-policy-mcp/
+sudo cp -r examples/policies /etc/kube-policy-mcp/policies            # or your own policies
+sudo chgrp -R 65532 /etc/kube-policy-mcp/policies
+sudo install -m 640 -o root -g 65532 /dev/null /etc/kube-policy-mcp/keys
+docker compose -f deploy/compose.yaml up -d --build
+curl http://127.0.0.1:8088/healthz                  # prints ok
+```
+
+The compose file mounts the config directory read-only, runs the container
+with a read-only file system and no capabilities, and publishes the port on
+localhost only. Route `/mcp` to it from Apache as above.
+
+Make keys with the image too. The key is printed for you; the line for the
+file goes to standard output:
+
+```sh
+sudo sh -c 'docker run --rm kube-policy-mcp:local new-key alice >> /etc/kube-policy-mcp/keys'
+```
+
+To update, rebuild and start again. Nothing is lost that matters: only the
+short history used by `explain_violation`.
+
+```sh
+git pull && docker compose -f deploy/compose.yaml up -d --build
+```
+
+To build the image yourself, with a version, or with fewer engines for a
+smaller image:
+
+```sh
+docker build --build-arg VERSION=1.2.3 -t kube-policy-mcp:local .
+```
+
+```sh
+docker build --build-arg TAGS="no_vap no_gatekeeper" -t kube-policy-mcp:opa .
+```
+
+**Podman** works too. The image and the compose file run unchanged with
+`podman` and `podman-compose`. Two things differ:
+
+- Run as root (`sudo podman …`), the config directory is set up exactly as
+  above.
+- Run rootless, user IDs inside the container are shifted, so ID 65532 can't
+  read a file that only your own user can. Map the container's user onto
+  yours with `--userns=keep-id:uid=65532,gid=65532` (in compose:
+  `userns_mode: "keep-id:uid=65532,gid=65532"`), and have your own user own
+  the config directory.
+
+On a host with SELinux (Fedora, RHEL), add `,z` to the volume line, as in
+`/etc/kube-policy-mcp:/config:ro,z`.
+
+The image also works for the local mode, with no Go needed. Mount a
+directory that holds your config and policies at `/config`:
+
+```json
+{
+  "mcpServers": {
+    "kube-policy": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-v", "/etc/kube-policy-mcp:/config:ro", "kube-policy-mcp:local"]
+    }
+  }
+}
+```
+
 ### Connecting an agent
 
 ```bash

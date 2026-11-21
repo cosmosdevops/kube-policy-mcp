@@ -1,0 +1,28 @@
+# Config for a hosted kube-policy-mcp. Put it, the policies and the keys
+# file in one directory:
+#
+#   /etc/kube-policy-mcp/kube-policy-mcp.yaml   this file
+#   /etc/kube-policy-mcp/policies/              your policy sources
+#   /etc/kube-policy-mcp/keys                   API keys (see new-key)
+#
+# Relative paths are resolved from the directory of this file.
+
+# No workspaceRoots: callers send their manifests inline. With no roots the
+# "files" and "evaluate_directory" inputs are refused, so nobody can read
+# files from the server.
+
+defaultPolicyPack: platform-baseline
+
+limits:
+  evaluationTimeout: 30s
+
+policyPacks:
+  - name: platform-baseline
+    description: Baseline policies for every workload
+    sources:
+      - engine: opa
+        path: ./policies/rego
+      - engine: vap
+        path: ./policies/vap
+      - engine: gatekeeper
+        path: ./policies/gatekeeper

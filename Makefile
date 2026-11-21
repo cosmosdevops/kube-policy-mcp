@@ -2,7 +2,7 @@ BINARY := bin/kube-policy-mcp
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/cosmosdevops/kube-policy-mcp/internal/app.Version=$(VERSION)
 
-.PHONY: build build-opa build-vap build-gatekeeper test vet demo
+.PHONY: build build-opa build-vap build-gatekeeper image test vet demo
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/kube-policy-mcp
@@ -17,6 +17,10 @@ build-vap:
 # Gatekeeper is built on the OPA and Kubernetes libraries, so they stay linked.
 build-gatekeeper:
 	go build -tags "no_opa no_vap" -ldflags "$(LDFLAGS)" -o $(BINARY)-gatekeeper ./cmd/kube-policy-mcp
+
+# Container image; see deploy/compose.yaml.
+image:
+	docker build --build-arg VERSION=$(VERSION) -t kube-policy-mcp:local .
 
 test:
 	go test ./...
