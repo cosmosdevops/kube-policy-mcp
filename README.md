@@ -301,7 +301,7 @@ make vet
 
 The tests in [tests](tests) build the binary and drive it over MCP, the way a
 client does. CI runs the same checks on every push and pull request, and
-publishes the container image from `master`.
+publishes the container image from `main`.
 
 ## Licence
 

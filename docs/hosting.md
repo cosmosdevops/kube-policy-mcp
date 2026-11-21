@@ -115,7 +115,7 @@ sudo apachectl configtest && sudo systemctl reload apache2
 ## Set up with Docker
 
 The image is `ghcr.io/cosmosdevops/kube-policy-mcp`, built from every commit
-on `master`. It holds the program and the licences of the code built into it,
+on `main`. It holds the program and the licences of the code built into it,
 and nothing else. It runs as an unprivileged user (ID 65532).
 
 Make the config directory readable by that user, then start the compose file

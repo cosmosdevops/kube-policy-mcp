@@ -19,7 +19,7 @@ name: Check manifests
 on:
   workflow_dispatch:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - examples/**
       - .github/workflows/check-manifests.yml

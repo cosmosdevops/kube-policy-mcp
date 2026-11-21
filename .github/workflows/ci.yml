@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ["v*"]
   pull_request:
 
@@ -87,7 +87,7 @@ jobs:
           echo "$files" | grep -qx 'licenses/go/LICENSE'
           echo "$files" | grep -q '^licenses/github.com/open-policy-agent/opa/LICENSE'
           echo "$files" | grep -q '^licenses/k8s.io/apiserver/LICENSE'
-      # Pull requests only build. Pushes to master publish :latest and the
+      # Pull requests only build. Pushes to main publish :latest and the
       # commit; version tags (v1.2.3) publish that version too.
       - name: Publish
         if: github.event_name == 'push'
@@ -96,7 +96,7 @@ jobs:
         run: |
           echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           tags=("sha-${GITHUB_SHA::7}")
-          if [ "$GITHUB_REF" = refs/heads/master ]; then tags+=(latest); fi
+          if [ "$GITHUB_REF" = refs/heads/main ]; then tags+=(latest); fi
           if [ "$GITHUB_REF_TYPE" = tag ]; then tags+=("${GITHUB_REF_NAME#v}"); fi
           for tag in "${tags[@]}"; do
             docker tag "$IMAGE:build" "$IMAGE:$tag"
