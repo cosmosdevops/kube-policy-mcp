@@ -77,6 +77,16 @@ jobs:
           # All three engines are in the image.
           engines=$(docker run --rm "$IMAGE:build" engines | grep -c '^[a-z]*:')
           [ "$engines" = 3 ]
+          # The image carries this project's licence and notice, and the
+          # licences of the modules built into the binary. It has no shell,
+          # so list its files from outside.
+          files=$(docker export "$(docker create "$IMAGE:build")" | tar -t)
+          echo "$files" | grep -qx 'licenses/LICENSE'
+          echo "$files" | grep -qx 'licenses/NOTICE'
+          echo "$files" | grep -qx 'licenses/MODULES.txt'
+          echo "$files" | grep -qx 'licenses/go/LICENSE'
+          echo "$files" | grep -q '^licenses/github.com/open-policy-agent/opa/LICENSE'
+          echo "$files" | grep -q '^licenses/k8s.io/apiserver/LICENSE'
       # Pull requests only build. Pushes to master publish :latest and the
       # commit; version tags (v1.2.3) publish that version too.
       - name: Publish

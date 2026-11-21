@@ -577,4 +577,16 @@ container image. Pushes to `master` publish the image as `:latest` and
 
 ## Licence
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The program is built from other open source modules, all under permissive
+licences (Apache 2.0, MIT, BSD and ISC). Their licence and notice files are in
+the `/licenses` directory of the container image. To produce the same set
+for a binary you built yourself:
+
+```bash
+make licenses
+```
+
+This project is not affiliated with or endorsed by the Kubernetes, Open
+Policy Agent or Gatekeeper projects.

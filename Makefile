@@ -2,7 +2,7 @@ BINARY := bin/kube-policy-mcp
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/cosmosdevops/kube-policy-mcp/internal/app.Version=$(VERSION)
 
-.PHONY: build build-opa build-vap build-gatekeeper image test vet demo
+.PHONY: build build-opa build-vap build-gatekeeper image licenses test vet demo
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/kube-policy-mcp
@@ -21,6 +21,11 @@ build-gatekeeper:
 # Container image; see deploy/compose.yaml.
 image:
 	docker build --build-arg VERSION=$(VERSION) -t kube-policy-mcp:local .
+
+# Licence and notice files of every module built into the binary. The
+# container image has the same set at /licenses.
+licenses: build
+	go run ./internal/tools/licenses -binary $(BINARY) -out bin/licenses
 
 test:
 	go test ./...

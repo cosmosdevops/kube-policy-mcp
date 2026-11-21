@@ -1,5 +1,5 @@
-# kube-policy-mcp as a small image: one static binary. Nothing else, not
-# even a shell. Policies and the config file are mounted in; see
+# kube-policy-mcp as a small image: one static binary and the licences of
+# the open source code built into it. Nothing else, not even a shell. Policies and the config file are mounted in; see
 # deploy/compose.yaml.
 FROM golang:1.27-alpine AS build
 WORKDIR /src
@@ -16,9 +16,14 @@ ARG TAGS=""
 RUN CGO_ENABLED=0 go build -trimpath -tags "${TAGS}" \
     -ldflags="-s -w -X github.com/cosmosdevops/kube-policy-mcp/internal/app.Version=${VERSION}" \
     -o /kube-policy-mcp ./cmd/kube-policy-mcp
+# Open source licences ask that their text travels with the binary. Collect
+# the licence and notice files of exactly the modules that were linked in.
+COPY LICENSE NOTICE ./
+RUN go run ./internal/tools/licenses -binary /kube-policy-mcp -out /licenses
 
 FROM scratch
 COPY --from=build /kube-policy-mcp /kube-policy-mcp
+COPY --from=build /licenses /licenses
 # The config file is looked for here unless --config says otherwise. Mount
 # a directory holding it, and the policies it names, at /config.
 ENV KUBE_POLICY_MCP_CONFIG=/config/kube-policy-mcp.yaml

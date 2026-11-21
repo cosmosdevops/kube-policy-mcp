@@ -455,8 +455,14 @@ func bindingEnforcement(b *admissionregistrationv1.ValidatingAdmissionPolicyBind
 	return policy.EnforceAudit
 }
 
-// compile builds the upstream validator for a policy. It follows the
-// unexported compilePolicy function of the API server plugin step by step.
+// compile builds the upstream validator for a policy.
+//
+// This function is adapted from compilePolicy in
+// k8s.io/apiserver/pkg/admission/plugin/policy/validating/plugin.go, which is
+// not exported. Copyright 2024 The Kubernetes Authors, licensed under the
+// Apache License, Version 2.0. Changes from the original: it returns an
+// error instead of a validator that carries the error, it recovers from
+// panics, and it compiles every expression a second time, as described next.
 //
 // The upstream validator only reports a bad expression when it is evaluated,
 // so each expression is also compiled here to find the error at load time.

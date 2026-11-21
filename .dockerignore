@@ -1,5 +1,7 @@
-# Only the Go sources go into the build.
+# Only the Go sources and the licence files go into the build.
 *
+!LICENSE
+!NOTICE
 !go.mod
 !go.sum
 !cmd
