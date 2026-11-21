@@ -3,13 +3,13 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: require-run-as-non-root
   annotations:
-    kubepolicy.dev/title: Non-root container execution
-    kubepolicy.dev/category: Pod Security
-    kubepolicy.dev/severity: high
-    kubepolicy.dev/description: >-
+    kubepolicy.cosmos.dev/title: Non-root container execution
+    kubepolicy.cosmos.dev/category: Pod Security
+    kubepolicy.cosmos.dev/severity: high
+    kubepolicy.cosmos.dev/description: >-
       Containers must run as a non-root user. runAsNonRoot must be true at the pod level or on every container.
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Set securityContext.runAsNonRoot to true in the pod spec, or set securityContext.runAsNonRoot to true on every container.
 spec:
   failurePolicy: Fail

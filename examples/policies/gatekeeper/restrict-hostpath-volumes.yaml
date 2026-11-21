@@ -30,10 +30,10 @@ kind: K8sDisallowHostPath
 metadata:
   name: restrict-hostpath-volumes
   annotations:
-    kubepolicy.dev/category: Pod Security
-    kubepolicy.dev/severity: high
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/category: Pod Security
+    kubepolicy.cosmos.dev/severity: high
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Replace hostPath volumes with a PersistentVolumeClaim, a ConfigMap, a Secret or an emptyDir volume.
 spec:
   enforcementAction: deny

@@ -42,14 +42,14 @@ import (
 
 // Annotations read from a constraint first, then from its template.
 const (
-	annTitle           = "kubepolicy.dev/title"
-	annDescription     = "kubepolicy.dev/description"
-	annSeverity        = "kubepolicy.dev/severity"
-	annCategory        = "kubepolicy.dev/category"
-	annRemediation     = "kubepolicy.dev/remediation"
-	annDocs            = "kubepolicy.dev/docs"
-	annVersion         = "kubepolicy.dev/version"
-	annRequiredContext = "kubepolicy.dev/required-context"
+	annTitle           = "kubepolicy.cosmos.dev/title"
+	annDescription     = "kubepolicy.cosmos.dev/description"
+	annSeverity        = "kubepolicy.cosmos.dev/severity"
+	annCategory        = "kubepolicy.cosmos.dev/category"
+	annRemediation     = "kubepolicy.cosmos.dev/remediation"
+	annDocs            = "kubepolicy.cosmos.dev/docs"
+	annVersion         = "kubepolicy.cosmos.dev/version"
+	annRequiredContext = "kubepolicy.cosmos.dev/required-context"
 	// The Gatekeeper policy library uses these on templates.
 	annLibraryTitle       = "metadata.gatekeeper.sh/title"
 	annLibraryDescription = "description"

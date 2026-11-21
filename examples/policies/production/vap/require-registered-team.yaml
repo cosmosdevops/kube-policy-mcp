@@ -6,14 +6,14 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: require-registered-team
   annotations:
-    kubepolicy.dev/title: Team must be registered
-    kubepolicy.dev/category: Ownership
-    kubepolicy.dev/severity: medium
-    kubepolicy.dev/description: >-
+    kubepolicy.cosmos.dev/title: Team must be registered
+    kubepolicy.cosmos.dev/category: Ownership
+    kubepolicy.cosmos.dev/severity: medium
+    kubepolicy.cosmos.dev/description: >-
       The team label of a production workload must be a key of the ConfigMap
       registered-teams in the platform-system namespace.
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Set metadata.labels.team to a team listed in the registered-teams ConfigMap, or ask the platform team to register your team.
 spec:
   failurePolicy: Fail

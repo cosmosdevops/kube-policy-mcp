@@ -43,13 +43,13 @@ kind: K8sRequiredLimits
 metadata:
   name: require-memory-limits
   annotations:
-    kubepolicy.dev/title: Required memory limits
-    kubepolicy.dev/description: >-
+    kubepolicy.cosmos.dev/title: Required memory limits
+    kubepolicy.cosmos.dev/description: >-
       Every container must set a memory limit. This overlaps on purpose with the Rego policy kubernetes.resource_limits to show two engines checking the same resource.
-    kubepolicy.dev/category: Resources
-    kubepolicy.dev/severity: medium
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/category: Resources
+    kubepolicy.cosmos.dev/severity: medium
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Set resources.limits.memory on every container.
 spec:
   enforcementAction: deny

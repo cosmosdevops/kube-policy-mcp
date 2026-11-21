@@ -3,13 +3,13 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
-    kubepolicy.dev/title: Prohibited host networking
-    kubepolicy.dev/category: Pod Security
-    kubepolicy.dev/severity: high
-    kubepolicy.dev/description: >-
+    kubepolicy.cosmos.dev/title: Prohibited host networking
+    kubepolicy.cosmos.dev/category: Pod Security
+    kubepolicy.cosmos.dev/severity: high
+    kubepolicy.cosmos.dev/description: >-
       Pods must not share the host network, PID or IPC namespaces.
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Remove hostNetwork, hostPID and hostIPC from the pod spec, or set them to false.
 spec:
   failurePolicy: Fail

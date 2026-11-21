@@ -63,13 +63,13 @@ kind: K8sDisallowedTags
 metadata:
   name: disallow-latest-tag-in-production
   annotations:
-    kubepolicy.dev/title: No mutable image tags in production
-    kubepolicy.dev/description: >-
+    kubepolicy.cosmos.dev/title: No mutable image tags in production
+    kubepolicy.cosmos.dev/description: >-
       In production namespaces, container images must use an explicit tag other than latest.
-    kubepolicy.dev/category: Supply Chain
-    kubepolicy.dev/severity: medium
-    kubepolicy.dev/version: 1.0.0
-    kubepolicy.dev/remediation: >-
+    kubepolicy.cosmos.dev/category: Supply Chain
+    kubepolicy.cosmos.dev/severity: medium
+    kubepolicy.cosmos.dev/version: 1.0.0
+    kubepolicy.cosmos.dev/remediation: >-
       Pin every container image to an explicit version tag or digest.
 spec:
   enforcementAction: deny

@@ -135,11 +135,11 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
-    kubepolicy.dev/title: Prohibited host networking
-    kubepolicy.dev/category: Pod Security
-    kubepolicy.dev/severity: high
-    kubepolicy.dev/description: Pods must not share the host network, PID or IPC namespaces.
-    kubepolicy.dev/remediation: Remove hostNetwork, hostPID and hostIPC from the pod spec.
+    kubepolicy.cosmos.dev/title: Prohibited host networking
+    kubepolicy.cosmos.dev/category: Pod Security
+    kubepolicy.cosmos.dev/severity: high
+    kubepolicy.cosmos.dev/description: Pods must not share the host network, PID or IPC namespaces.
+    kubepolicy.cosmos.dev/remediation: Remove hostNetwork, hostPID and hostIPC from the pod spec.
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -177,11 +177,11 @@ are this project's own. All are optional.
 
 | Annotation | Used for |
 | --- | --- |
-| `kubepolicy.dev/title`, `/description`, `/category`, `/severity` | Shown in listings and explanations. |
-| `kubepolicy.dev/remediation` | The fix shown with each violation. |
-| `kubepolicy.dev/docs` | Comma-separated documentation links. |
-| `kubepolicy.dev/version` | Policy version. |
-| `kubepolicy.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
+| `kubepolicy.cosmos.dev/title`, `/description`, `/category`, `/severity` | Shown in listings and explanations. |
+| `kubepolicy.cosmos.dev/remediation` | The fix shown with each violation. |
+| `kubepolicy.cosmos.dev/docs` | Comma-separated documentation links. |
+| `kubepolicy.cosmos.dev/version` | Policy version. |
+| `kubepolicy.cosmos.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
 
 Some required context is detected for you: a `namespaceSelector` (on the
 policy or a binding) and `namespaceObject` need `namespace.labels`, and
@@ -276,8 +276,8 @@ kind: K8sRequiredLimits
 metadata:
   name: require-memory-limits
   annotations:
-    kubepolicy.dev/severity: medium
-    kubepolicy.dev/remediation: Set resources.limits.memory on every container.
+    kubepolicy.cosmos.dev/severity: medium
+    kubepolicy.cosmos.dev/remediation: Set resources.limits.memory on every container.
 spec:
   enforcementAction: deny
   match:
@@ -295,13 +295,13 @@ template can carry the general text and each constraint can override it.
 
 | Annotation | Used for |
 | --- | --- |
-| `kubepolicy.dev/title`, or `metadata.gatekeeper.sh/title` | Title. |
-| `kubepolicy.dev/description`, or `description` | Description. |
-| `kubepolicy.dev/severity`, `/category` | Shown in listings. |
-| `kubepolicy.dev/remediation` | The fix shown with each violation. |
-| `kubepolicy.dev/docs` | Comma-separated documentation links. |
-| `kubepolicy.dev/version`, or `metadata.gatekeeper.sh/version` | Version. |
-| `kubepolicy.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
+| `kubepolicy.cosmos.dev/title`, or `metadata.gatekeeper.sh/title` | Title. |
+| `kubepolicy.cosmos.dev/description`, or `description` | Description. |
+| `kubepolicy.cosmos.dev/severity`, `/category` | Shown in listings. |
+| `kubepolicy.cosmos.dev/remediation` | The fix shown with each violation. |
+| `kubepolicy.cosmos.dev/docs` | Comma-separated documentation links. |
+| `kubepolicy.cosmos.dev/version`, or `metadata.gatekeeper.sh/version` | Version. |
+| `kubepolicy.cosmos.dev/required-context` | Comma-separated context keys, same keys as for Rego. |
 
 The `metadata.gatekeeper.sh/*` and `description` annotations are the ones the
 Gatekeeper policy library uses, so its templates work unchanged.
